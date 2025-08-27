@@ -217,7 +217,7 @@ module mpp_domains_mod
   public :: mpp_broadcast_domain, mpp_domains_init, mpp_domains_exit, mpp_redistribute
   public :: mpp_update_domains, mpp_check_field
   public :: mpp_start_update_domains, mpp_complete_update_domains
-  public :: mpp_create_group_update, mpp_do_group_update
+  public :: mpp_create_group_update, mpp_do_group_update, mpp_do_group_update_omp
   public :: mpp_start_group_update, mpp_complete_group_update
   public :: mpp_reset_group_update_field
   public :: mpp_update_nest_fine, mpp_update_nest_coarse
@@ -1426,6 +1426,10 @@ module mpp_domains_mod
      module procedure mpp_do_group_update_r4
      module procedure mpp_do_group_update_r8
   end interface mpp_do_group_update
+  interface mpp_do_group_update_omp
+     module procedure mpp_do_group_update_omp_r4
+     module procedure mpp_do_group_update_omp_r8
+  end interface mpp_do_group_update_omp
 
   interface mpp_start_group_update
      module procedure mpp_start_group_update_r4

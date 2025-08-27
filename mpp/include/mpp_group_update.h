@@ -634,6 +634,223 @@ subroutine MPP_DO_GROUP_UPDATE_(group, domain, d_type)
 end subroutine MPP_DO_GROUP_UPDATE_
 
 
+subroutine MPP_DO_GROUP_UPDATE_OMP_(group, domain, d_type)
+  type(mpp_group_update_type), intent(inout) :: group
+  type(domain2D),              intent(inout) :: domain
+  MPP_TYPE_,                   intent(in)    :: d_type
+
+  integer   :: nscalar, nvector, nlist
+  logical   :: recv_y(8)
+  integer   :: nsend, nrecv, flags_v
+  integer   :: msgsize
+  integer   :: from_pe, to_pe, buffer_pos, pos, idx
+  integer   :: ksize, is, ie, js, je
+  integer   :: n, l, m, i, j, k, buffer_start_pos, nk
+  integer   :: shift, gridtype, midpoint
+  integer   :: npack, nunpack, rotation, isd
+  character(len=8)            :: text
+
+  MPP_TYPE_ :: buffer(mpp_domains_stack_size)
+  MPP_TYPE_ :: field (group%is_s:group%ie_s,group%js_s:group%je_s, group%ksize_s)
+  MPP_TYPE_ :: fieldx(group%is_x:group%ie_x,group%js_x:group%je_x, group%ksize_v)
+  MPP_TYPE_ :: fieldy(group%is_y:group%ie_y,group%js_y:group%je_y, group%ksize_v)
+  pointer(ptr, buffer )
+  pointer(ptr_field, field)
+  pointer(ptr_fieldx, fieldx)
+  pointer(ptr_fieldy, fieldy)
+
+  nscalar = group%nscalar
+  nvector = group%nvector
+  nlist   = size(domain%list(:))
+  gridtype = group%gridtype
+
+  !--- ksize_s must equal ksize_v
+  if(nvector > 0 .AND. nscalar > 0) then
+     if(group%ksize_s .NE. group%ksize_v) then
+        call mpp_error(FATAL, "MPP_DO_GROUP_UPDATE: ksize_s and ksize_v are not equal")
+     endif
+     ksize = group%ksize_s
+  else if (nscalar > 0) then
+     ksize = group%ksize_s
+  else if (nvector > 0) then
+     ksize = group%ksize_v
+  else
+     call mpp_error(FATAL, "MPP_DO_GROUP_UPDATE: nscalar and nvector are all 0")
+  endif
+  if(nvector > 0) recv_y = group%recv_y
+
+  ptr = LOC(mpp_domains_stack)
+
+  !--- set reset_index_s and reset_index_v to 0
+  group%reset_index_s = 0
+  group%reset_index_v = 0
+
+  if(.not. group%initialized) call set_group_update(group,domain)
+
+  nrecv = group%nrecv
+  nsend = group%nsend
+
+  !---pre-post receive.
+  call mpp_clock_begin(group_recv_clock)
+  do m = 1, nrecv
+     msgsize = group%recv_size(m)
+     from_pe = group%from_pe(m)
+     if( msgsize .GT. 0 )then
+        buffer_pos = group%buffer_pos_recv(m)
+        call mpp_recv( buffer(buffer_pos+1), glen=msgsize, from_pe=from_pe, block=.false., &
+             tag=COMM_TAG_1)
+     end if
+  end do
+
+ !pack the data
+  call mpp_clock_end(group_recv_clock)
+
+  flags_v = group%flags_v
+  npack = group%npack
+
+  call mpp_clock_begin(group_pack_clock)
+  !pack the data
+  buffer_start_pos = 0
+#include <group_update_pack_omp.inc>
+  call mpp_clock_end(group_pack_clock)
+
+  call mpp_clock_begin(group_send_clock)
+  do n = 1, nsend
+     msgsize = group%send_size(n)
+     if( msgsize .GT. 0 )then
+        buffer_pos = group%buffer_pos_send(n)
+        to_pe = group%to_pe(n)
+        call mpp_send( buffer(buffer_pos+1), plen=msgsize, to_pe=to_pe, tag=COMM_TAG_1)
+     endif
+  enddo
+  call mpp_clock_end(group_send_clock)
+
+  if(nrecv>0) then
+     call mpp_clock_begin(group_wait_clock)
+     call mpp_sync_self(check=EVENT_RECV)
+     call mpp_clock_end(group_wait_clock)
+  endif
+
+  !---unpack the buffer
+  nunpack = group%nunpack
+  call mpp_clock_begin(group_unpk_clock)
+#include <group_update_unpack_omp.inc>
+  call mpp_clock_end(group_unpk_clock)
+
+  ! ---northern boundary fold
+  shift = 0
+  if(domain%symmetry) shift = 1
+  if( nvector >0 .AND. BTEST(domain%fold,NORTH) .AND. (.NOT.BTEST(flags_v,SCALAR_BIT)) )then
+     j = domain%y(1)%global%end+shift
+     if( domain%y(1)%data%begin.LE.j .AND. j.LE.domain%y(1)%data%end+shift )then !fold is within domain
+        !poles set to 0: BGRID only
+        if( gridtype.EQ.BGRID_NE )then
+           midpoint = (domain%x(1)%global%begin+domain%x(1)%global%end-1+shift)/2
+           j  = domain%y(1)%global%end+shift
+           is = domain%x(1)%global%begin; ie = domain%x(1)%global%end+shift
+           if( .NOT. domain%symmetry ) is = is - 1
+           do i = is ,ie, midpoint
+              if( domain%x(1)%data%begin.LE.i .AND. i.LE. domain%x(1)%data%end+shift )then
+                 do l=1,nvector
+                    ptr_fieldx = group%addrs_x(l)
+                    ptr_fieldy = group%addrs_y(l)
+                    do k = 1,ksize
+                       fieldx(i,j,k) = 0.
+                       fieldy(i,j,k) = 0.
+                    end do
+                 end do
+              end if
+           end do
+        endif
+        ! the following code code block correct an error where the data in your halo coming from
+        ! other half may have the wrong sign
+        !off west edge, when update north or west direction
+        j = domain%y(1)%global%end+shift
+        if ( recv_y(7) .OR. recv_y(5) ) then
+           select case(gridtype)
+           case(BGRID_NE)
+              if(domain%symmetry) then
+                 is = domain%x(1)%global%begin
+              else
+                 is = domain%x(1)%global%begin - 1
+              end if
+              if( is.GT.domain%x(1)%data%begin )then
+
+                 if( 2*is-domain%x(1)%data%begin.GT.domain%x(1)%data%end+shift ) &
+                      call mpp_error( FATAL, 'MPP_DO_UPDATE_V: folded-north BGRID_NE west edge ubound error.' )
+                 do l=1,nvector
+                    ptr_fieldx = group%addrs_x(l)
+                    ptr_fieldy = group%addrs_y(l)
+                    do k = 1,ksize
+                       do i = domain%x(1)%data%begin,is-1
+                          fieldx(i,j,k) = fieldx(2*is-i,j,k)
+                          fieldy(i,j,k) = fieldy(2*is-i,j,k)
+                       end do
+                    end do
+                 end do
+              end if
+           case(CGRID_NE)
+              is = domain%x(1)%global%begin
+              isd = domain%x(1)%compute%begin - group%whalo_v
+              if( is.GT.isd )then
+                 if( 2*is-domain%x(1)%data%begin-1.GT.domain%x(1)%data%end ) &
+                      call mpp_error( FATAL, 'MPP_DO_UPDATE_V: folded-north CGRID_NE west edge ubound error.' )
+                 do l=1,nvector
+                    ptr_fieldy = group%addrs_y(l)
+                    do k = 1,ksize
+                       do i = isd,is-1
+                          fieldy(i,j,k) = fieldy(2*is-i-1,j,k)
+                       end do
+                    end do
+                 end do
+              end if
+           end select
+        end if
+        !off east edge
+        is = domain%x(1)%global%end
+        if(domain%x(1)%cyclic .AND. is.LT.domain%x(1)%data%end )then
+           ie = domain%x(1)%compute%end+group%ehalo_v
+           is = is + 1
+           select case(gridtype)
+           case(BGRID_NE)
+              is = is + shift
+              ie = ie + shift
+              do l=1,nvector
+                 ptr_fieldx = group%addrs_x(l)
+                 ptr_fieldy = group%addrs_y(l)
+                 do k = 1,ksize
+                    do i = is,ie
+                       fieldx(i,j,k) = -fieldx(i,j,k)
+                       fieldy(i,j,k) = -fieldy(i,j,k)
+                    end do
+                 end do
+              end do
+           case(CGRID_NE)
+              do l=1,nvector
+                 ptr_fieldy = group%addrs_y(l)
+                 do k = 1,ksize
+                    do i = is, ie
+                       fieldy(i,j,k) = -fieldy(i,j,k)
+                    end do
+                 end do
+              end do
+           end select
+        end if
+     end if
+  else if( BTEST(domain%fold,SOUTH) .OR. BTEST(domain%fold,WEST) .OR. BTEST(domain%fold,EAST) ) then
+     call mpp_error(FATAL, "MPP_DO_GROUP_UPDATE: this interface does not support folded_south, " // &
+          "folded_west of folded_east, contact developer")
+  endif
+
+  if(nsend>0) then
+     call mpp_clock_begin(group_wait_clock)
+     call mpp_sync_self( )
+     call mpp_clock_end(group_wait_clock)
+  endif
+
+end subroutine MPP_DO_GROUP_UPDATE_OMP_
+
+
 subroutine MPP_START_GROUP_UPDATE_(group, domain, d_type, reuse_buffer)
   type(mpp_group_update_type), intent(inout) :: group
   type(domain2D),              intent(inout) :: domain

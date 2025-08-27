@@ -2088,6 +2088,8 @@ end subroutine init_nonblock_type
 #define MPP_CREATE_GROUP_UPDATE_4D_V_ mpp_create_group_update_r8_4dv
 #undef MPP_DO_GROUP_UPDATE_
 #define MPP_DO_GROUP_UPDATE_ mpp_do_group_update_r8
+#undef MPP_DO_GROUP_UPDATE_OMP_
+#define MPP_DO_GROUP_UPDATE_OMP_ mpp_do_group_update_omp_r8
 #undef MPP_START_GROUP_UPDATE_
 #define MPP_START_GROUP_UPDATE_ mpp_start_group_update_r8
 #undef MPP_COMPLETE_GROUP_UPDATE_
@@ -2124,6 +2126,8 @@ end subroutine init_nonblock_type
 #define MPP_CREATE_GROUP_UPDATE_4D_V_ mpp_create_group_update_r4_4dv
 #undef MPP_DO_GROUP_UPDATE_
 #define MPP_DO_GROUP_UPDATE_ mpp_do_group_update_r4
+#undef MPP_DO_GROUP_UPDATE_OMP_
+#define MPP_DO_GROUP_UPDATE_OMP_ mpp_do_group_update_omp_r4
 #undef MPP_START_GROUP_UPDATE_
 #define MPP_START_GROUP_UPDATE_ mpp_start_group_update_r4
 #undef MPP_COMPLETE_GROUP_UPDATE_
