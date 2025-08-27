@@ -692,13 +692,14 @@ subroutine MPP_DO_GROUP_UPDATE_OMP_(group, domain, d_type)
 
   !---pre-post receive.
   call mpp_clock_begin(group_recv_clock)
+  !$omp target enter data map(alloc: buffer)
   do m = 1, nrecv
      msgsize = group%recv_size(m)
      from_pe = group%from_pe(m)
      if( msgsize .GT. 0 )then
         buffer_pos = group%buffer_pos_recv(m)
         call mpp_recv( buffer(buffer_pos+1), glen=msgsize, from_pe=from_pe, block=.false., &
-             tag=COMM_TAG_1)
+             tag=COMM_TAG_1, use_dev=.true.)
      end if
   end do
 
@@ -720,7 +721,7 @@ subroutine MPP_DO_GROUP_UPDATE_OMP_(group, domain, d_type)
      if( msgsize .GT. 0 )then
         buffer_pos = group%buffer_pos_send(n)
         to_pe = group%to_pe(n)
-        call mpp_send( buffer(buffer_pos+1), plen=msgsize, to_pe=to_pe, tag=COMM_TAG_1)
+        call mpp_send( buffer(buffer_pos+1), plen=msgsize, to_pe=to_pe, tag=COMM_TAG_1, use_dev=.true.)
      endif
   enddo
   call mpp_clock_end(group_send_clock)
@@ -735,6 +736,7 @@ subroutine MPP_DO_GROUP_UPDATE_OMP_(group, domain, d_type)
   nunpack = group%nunpack
   call mpp_clock_begin(group_unpk_clock)
 #include <group_update_unpack_omp.inc>
+  !$omp target exit data map(release: buffer)
   call mpp_clock_end(group_unpk_clock)
 
   ! ---northern boundary fold

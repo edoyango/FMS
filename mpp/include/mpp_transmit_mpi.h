@@ -22,7 +22,7 @@
 !                                                                             !
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-    subroutine MPP_TRANSMIT_( put_data, put_len, to_pe, get_data, get_len, from_pe, block, tag, recv_request, send_request )
+    subroutine MPP_TRANSMIT_( put_data, put_len, to_pe, get_data, get_len, from_pe, block, tag, recv_request, send_request, use_dev )
 !a message-passing routine intended to be reminiscent equally of both MPI and SHMEM
 
 !put_data and get_data are contiguous MPP_TYPE_ arrays
@@ -47,11 +47,16 @@
       logical, intent(in),  optional :: block
       integer, intent(in),  optional :: tag
       integer, intent(out), optional :: recv_request, send_request
+      logical, intent(in), optional :: use_dev
       logical                       :: block_comm
       integer                       :: i
       MPP_TYPE_, allocatable, save  :: local_data(:) !local copy used by non-parallel code (no SHMEM or MPI)
       integer                       :: comm_tag
       integer                       :: rsize
+      logical :: omp_offload
+
+      omp_offload = .false.
+      if (present(use_dev)) omp_offload = use_dev
 
       if( .NOT.module_is_initialized )call mpp_error( FATAL, 'MPP_TRANSMIT: You must first call mpp_init.' )
       if( to_pe.EQ.NULL_PE .AND. from_pe.EQ.NULL_PE )return
@@ -83,7 +88,13 @@
              cur_send_request = cur_send_request + 1
              if( cur_send_request > max_request ) call mpp_error(FATAL, &
                 "MPP_TRANSMIT: cur_send_request is greater than max_request, increase mpp_nml request_multiply")
-             call MPI_ISEND( put_data, put_len, MPI_TYPE_, to_pe, comm_tag, mpp_comm_private, request_send(cur_send_request), error)
+             if (omp_offload) then
+                !$omp target data use_device_ptr(put_data)
+                call MPI_ISEND( put_data, put_len, MPI_TYPE_, to_pe, comm_tag, mpp_comm_private, request_send(cur_send_request), error)
+                !$omp end target data
+             else
+                call MPI_ISEND( put_data, put_len, MPI_TYPE_, to_pe, comm_tag, mpp_comm_private, request_send(cur_send_request), error)
+             endif
           endif
           if( debug .and. (current_clock.NE.0) )call increment_current_clock( EVENT_SEND, put_len*MPP_TYPE_BYTELEN_ )
       else if( to_pe.EQ.ALL_PES )then !this is a broadcast from from_pe
@@ -129,8 +140,15 @@
                 cur_recv_request = cur_recv_request + 1
                 if( cur_recv_request > max_request ) call mpp_error(FATAL, &
                 "MPP_TRANSMIT: cur_recv_request is greater than max_request, increase mpp_nml request_multiply")
-                call MPI_IRECV( get_data, get_len, MPI_TYPE_, from_pe, comm_tag, mpp_comm_private, &
-                     request_recv(cur_recv_request), error )
+                if (omp_offload) then
+                    !$omp target data use_device_ptr(get_data)
+                    call MPI_IRECV( get_data, get_len, MPI_TYPE_, from_pe, comm_tag, mpp_comm_private, &
+                        request_recv(cur_recv_request), error )
+                    !$omp end target data
+                else
+                    call MPI_IRECV( get_data, get_len, MPI_TYPE_, from_pe, comm_tag, mpp_comm_private, &
+                        request_recv(cur_recv_request), error )
+                endif
                 size_recv(cur_recv_request) = get_len
                 type_recv(cur_recv_request) = MPI_TYPE_
              endif

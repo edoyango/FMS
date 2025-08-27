@@ -27,7 +27,6 @@ if( group%k_loop_inside ) then
      if( group%pack_type(n) == FIELD_S ) then
         select case( rotation )
         case(ZERO)
-           print *, "k_loop_inside FIELD_S ZERO"
            do l=1, group%nscalar  ! loop over number of fields
               ptr_field = group%addrs_s(l)
               !$omp target teams distribute parallel do collapse(3) private(idx) &
@@ -44,7 +43,6 @@ if( group%k_loop_inside ) then
               pos = pos + ksize*(je-js+1)*(ie-is+1)
            enddo
         case( MINUS_NINETY )
-         print *, "k_loop_inside FIELD_S MINUS_NINETY"
            do l=1,group%nscalar  ! loop over number of fields
               ptr_field = group%addrs_s(l)
               do k = 1, ksize
@@ -57,7 +55,6 @@ if( group%k_loop_inside ) then
               end do
            end do
         case( NINETY )
-         print *, "k_loop_inside FIELD_S NINETY"
            do l=1,group%nscalar  ! loop over number of fields
               ptr_field = group%addrs_s(l)
               do k = 1, ksize
@@ -70,7 +67,6 @@ if( group%k_loop_inside ) then
               end do
            end do
         case( ONE_HUNDRED_EIGHTY )
-         print *, "k_loop_inside FIELD_S ONE_HUNDRED_EIGHTY"
            do l=1,group%nscalar  ! loop over number of fields
               ptr_field = group%addrs_s(l)
               do k = 1, ksize
@@ -86,7 +82,6 @@ if( group%k_loop_inside ) then
      else if( group%pack_type(n) == FIELD_X  ) then
         select case( rotation )
         case(ZERO)
-         print *, "k_loop_inside FIELD_X ZERO"
            do l=1, nvector  ! loop over number of fields
               ptr_fieldx = group%addrs_x(l)
               !$omp target teams distribute parallel do collapse(3) private(idx) &
@@ -103,7 +98,6 @@ if( group%k_loop_inside ) then
               pos = pos + ksize*(je-js+1)*(ie-is+1)
            end do
         case( MINUS_NINETY )
-         print *, "k_loop_inside FIELD_X MINUS_NINETY"
            if( BTEST(group%flags_v,SCALAR_BIT) ) then
               do l=1,nvector  ! loop over number of fields
                  ptr_fieldy = group%addrs_y(l)
@@ -130,7 +124,6 @@ if( group%k_loop_inside ) then
               end do
            end if
         case( NINETY )
-         print *, "k_loop_inside FIELD_X NINETY"
            do l=1, nvector  ! loop over number of fields
               ptr_fieldy = group%addrs_y(l)
               do k = 1, ksize
@@ -143,7 +136,6 @@ if( group%k_loop_inside ) then
               end do
            end do
         case( ONE_HUNDRED_EIGHTY )
-         print *, "k_loop_inside FIELD_X ONE_HUNDRED_EIGHTY"
            if( BTEST(group%flags_v,SCALAR_BIT) ) then
               do l=1,nvector  ! loop over number of fields
                  ptr_fieldx = group%addrs_x(l)
@@ -173,7 +165,6 @@ if( group%k_loop_inside ) then
      else if( group%pack_type(n) == FIELD_Y ) then
         select case( rotation )
         case(ZERO)
-         print *, "k_loop_inside FIELD_Y ZERO"
            do l=1, nvector  ! loop over number of fields
               ptr_fieldy = group%addrs_y(l)
               !$omp target teams distribute parallel do collapse(3) private(idx) &
@@ -190,7 +181,6 @@ if( group%k_loop_inside ) then
               pos = pos + ksize*(je-js+1)*(ie-is+1)
            end do
         case( MINUS_NINETY )
-         print *, "k_loop_inside FIELD_Y MINUS_NINETY"
            do l=1,nvector  ! loop over number of fields
               ptr_fieldx = group%addrs_x(l)
               do k = 1, ksize
@@ -203,7 +193,6 @@ if( group%k_loop_inside ) then
               end do
            end do
         case( NINETY )
-         print *, "k_loop_inside FIELD_Y NINETY"
            if( BTEST(group%flags_v,SCALAR_BIT) ) then
               do l=1, nvector  ! loop over number of fields
                  ptr_fieldx = group%addrs_x(l)
@@ -230,7 +219,6 @@ if( group%k_loop_inside ) then
               end do
            end if
         case( ONE_HUNDRED_EIGHTY )
-         print *, "k_loop_inside FIELD_Y ONE_HUNDRED_EIGHTY"
            if( BTEST(group%flags_v,SCALAR_BIT) ) then
               do l=1,nvector  ! loop over number of fields
                  ptr_fieldy = group%addrs_y(l)
@@ -260,7 +248,6 @@ if( group%k_loop_inside ) then
      endif
   enddo
 else
-   print *, "k_loop_outside"
   do nk = 1, npack*ksize
      n = (nk-1)/ksize + 1
      k = mod((nk-1), ksize) + 1
