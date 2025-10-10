@@ -102,30 +102,33 @@ else
            ptr_field = group%addrs_s(l)
            do j = js, je
               do i = is, ie
-                 pos = pos + 1
-                 field(i,j,k) = buffer(pos)
+                 idx = pos + (j-js)*ni + (i-is) + 1
+                 field(i,j,k) = buffer(idx)
               end do
            end do
+           pos = pos + ni*nj
         end do
      else if( group%unpack_type(n) == FIELD_X ) then
         do l=1,nvector  ! loop over number of fields
            ptr_fieldx = group%addrs_x(l)
            do j = js, je
               do i = is, ie
-                 pos = pos + 1
-                 fieldx(i,j,k) = buffer(pos)
+                 idx = pos + (j-js)*ni + (i-is) + 1
+                 fieldx(i,j,k) = buffer(idx)
               end do
            end do
+           pos = pos + ni*nj
         end do
      else if( group%unpack_type(n) == FIELD_Y ) then
         do l=1,nvector  ! loop over number of fields
            ptr_fieldy = group%addrs_y(l)
            do j = js, je
               do i = is, ie
-                 pos = pos + 1
-                 fieldy(i,j,k) = buffer(pos)
+               idx = pos + (j-js)*ni + (i-is) + 1
+               fieldy(i,j,k) = buffer(idx)
               end do
            end do
+           pos = pos + ni*nj
         end do
      endif
   enddo
