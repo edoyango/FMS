@@ -31,6 +31,8 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   !> @brief Initialize the @ref mpp_mod module. Must be called before any usage.
   subroutine mpp_init( flags, localcomm, test_level, alt_input_nml_path )
+  use omp_lib
+  ! in theory we should be able to do !$use omp_lib so that it only gets compiled with omp
   integer, optional, intent(in) :: flags !< Flags for debug output, can be MPP_VERBOSE or MPP_DEBUG
   integer, optional, intent(in) :: localcomm !< Id of MPI communicator used to initialize
   integer, optional, intent(in) :: test_level !< Used to exit initialization at certain stages
@@ -53,6 +55,8 @@
   endif
   call MPI_COMM_RANK( mpp_comm_private, pe,   error )
   call MPI_COMM_SIZE( mpp_comm_private, npes, error )
+  !$    call omp_set_default_device (pe)
+  !$acc set device_num(pe)
 
   module_is_initialized = .TRUE.
   if (present(test_level)) then
