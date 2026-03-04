@@ -66,6 +66,11 @@ option(GFS_PHYS              "Enable compiler definition -DGFS_PHYS"            
 option(LARGEFILE             "Enable compiler definition -Duse_LARGEFILE"         OFF)
 option(WITH_YAML             "Enable compiler definition -Duse_yaml"              OFF)
 option(USE_DEPRECATED_IO     "THIS OPTION HAS NO EFFECT AND WILL BE REMOVED IN A FUTURE RELEASE"   OFF)
+if(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
+  set(ENABLE_QUAD_PRECISION OFF)
+  message(WARNING "NVHPC does not support building FMS with QUAD_PRECISION!")
+endif()
+
 
 if(32BIT)
   list(APPEND kinds "r4")
@@ -742,7 +747,6 @@ list(APPEND TEST_SRC_SINGLE_TARGET
   test_fms/parser/parser_demo2.F90
   test_fms/parser/test_output_yaml.F90
   test_fms/parser/generic_blocks.F90
-  test_fms/string_utils/test_string_utils.F90
   test_fms/time_manager/test_time_manager.F90
   )
 # list any test sources that are used for two executables (r4 and r8)
@@ -772,7 +776,11 @@ list(APPEND TEST_SRC_MULTI_TARGET
   test_fms/tracer_manager/test_tracer_manager.F90
   test_fms/tridiagonal/test_tridiagonal.F90
   )
-
+if(NOT ${CMAKE_Fortran_COMPILER_ID} STREQUAL "NVHPC")
+list(APPEND TEST_SRC_SINGLE_TARGET
+test_fms/string_utils/test_string_utils.F90
+)
+endif()
 # add all the test executables and set up linking + compile flags
 foreach (testFile ${TEST_SRC_SINGLE_TARGET})
   get_filename_component (TName ${testFile} NAME_WE)
