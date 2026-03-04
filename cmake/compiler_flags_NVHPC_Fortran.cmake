@@ -2,7 +2,7 @@
 set(r8_flags "-r8") # Fortran flags for 64BIT precision
 
 # NVHPC Fortan
-set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} ")
+set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -O2 -Mnovect  -gpu=mem:separate -Mnofma  -mp=gpu -acc=gpu")
 
 set(CMAKE_Fortran_FLAGS_RELEASE "-O3")
 
