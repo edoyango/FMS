@@ -333,6 +333,7 @@ foreach(kind ${kinds})
                                                  mosaic2/include
                                                  constants
                                                  astronomy/include
+                                                 field_manager
                                                  field_manager/include
                                                  time_interp/include
                                                  tracer_manager/include
