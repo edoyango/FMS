@@ -28,6 +28,7 @@ project(FMS
   HOMEPAGE_URL "https://www.gfdl.noaa.gov/fms"
   LANGUAGES C Fortran)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(GNUInstallDirs)
 
 if(NOT CMAKE_BUILD_TYPE MATCHES "^(Debug|Release|RelWithDebInfo|MinSizeRel|DebugUFS|ReleaseUFS)$")
@@ -428,6 +429,11 @@ foreach(kind ${kinds})
     target_link_libraries(${libTgt} PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_Fortran)
   endif()
 
+  # Propagate GPU link flags so consumers can extract device code from the static library
+  if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
+    target_link_options(${libTgt} INTERFACE -mp=gpu -acc=gpu -gpu=mem:separate)
+  endif()
+
   add_library(FMS::${libTgt} ALIAS ${libTgt})
 
   list(APPEND LIB_TARGETS ${libTgt})
@@ -571,6 +577,11 @@ if(NOT kinds)
       target_link_libraries(${libTgt} PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_Fortran)
     endif()
 
+    # Propagate GPU link flags so consumers can extract device code from the static library
+    if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
+      target_link_options(${libTgt} INTERFACE -mp=gpu -acc=gpu -gpu=mem:separate)
+    endif()
+
     add_library(FMS::${libTgt} ALIAS ${libTgt})
 
     list(APPEND LIB_TARGETS ${libTgt})
@@ -588,6 +599,8 @@ install(
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 ### Unit Testing
+option(FMS_ENABLE_TESTING "Build FMS unit tests" ON)
+if(FMS_ENABLE_TESTING)
 include(CTest)
 
 # TODO autotools also checks if srun is available
@@ -889,6 +902,7 @@ foreach (testScript ${TEST_SCRIPTS})
 endforeach()
 
 set(CMAKE_CTEST_ARGUMENTS "--output-on-failure")
+endif() # FMS_ENABLE_TESTING
 
 ### Package config
 include(CMakePackageConfigHelpers)
