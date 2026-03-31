@@ -19,7 +19,7 @@
 
 # Copyright (c) GFDL, @underwoo
 
-cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.22 FATAL_ERROR)
 
 # Define the CMake project
 project(FMS
@@ -349,7 +349,9 @@ foreach(kind ${kinds})
                                                  data_override/include
                                                  amip_interp/include)
   target_compile_definitions(${libTgt}_f PRIVATE "${fms_defs}")
-  target_compile_definitions(${libTgt}_f PRIVATE "${${kind}_defs}")
+  if(${kind}_defs)
+    target_compile_definitions(${libTgt}_f PRIVATE "${${kind}_defs}")
+  endif()
   set_target_properties(${libTgt}_f PROPERTIES COMPILE_FLAGS ${${kind}_flags})
   set_target_properties(${libTgt}_f PROPERTIES Fortran_MODULE_DIRECTORY
                                                ${moduleDir})
@@ -419,7 +421,9 @@ foreach(kind ${kinds})
     $<INSTALL_INTERFACE:${includeDir}>)
 
   target_compile_definitions(${libTgt} PRIVATE "${fms_defs}")
-  target_compile_definitions(${libTgt} PRIVATE "${${kind}_defs}")
+  if(${kind}_defs)
+    target_compile_definitions(${libTgt} PRIVATE "${${kind}_defs}")
+  endif()
 
   target_link_libraries(${libTgt} PUBLIC NetCDF::NetCDF_C
                                          NetCDF::NetCDF_Fortran
@@ -500,7 +504,9 @@ if(NOT kinds)
                                                    data_override/include
                                                    amip_interp/include)
     target_compile_definitions(${libTgt}_f PRIVATE "${fms_defs}")
-    target_compile_definitions(${libTgt}_f PRIVATE "${${kind}_defs}")
+    if(${kind}_defs)
+      target_compile_definitions(${libTgt}_f PRIVATE "${${kind}_defs}")
+    endif()
     set_target_properties(${libTgt}_f PROPERTIES COMPILE_FLAGS ${${kind}_flags})
     set_target_properties(${libTgt}_f PROPERTIES Fortran_MODULE_DIRECTORY
                                                  ${moduleDir})
@@ -566,7 +572,9 @@ if(NOT kinds)
       $<INSTALL_INTERFACE:${includeDir}>)
 
     target_compile_definitions(${libTgt} PRIVATE "${fms_defs}")
-    target_compile_definitions(${libTgt} PRIVATE "${${kind}_defs}")
+    if(${kind}_defs)
+      target_compile_definitions(${libTgt} PRIVATE "${${kind}_defs}")
+    endif()
     set_target_properties(${libTgt}_f PROPERTIES COMPILE_FLAGS ${${kind}_flags})
 
     target_link_libraries(${libTgt} PUBLIC NetCDF::NetCDF_C
@@ -799,7 +807,9 @@ foreach (testFile ${TEST_SRC_SINGLE_TARGET})
   get_filename_component (TName ${testFile} NAME_WE)
 
   add_executable(${TName} ${testFile})
-  target_compile_definitions(${TName} PRIVATE "${r8_defs}")
+  if(r8_defs)
+    target_compile_definitions(${TName} PRIVATE "${r8_defs}")
+  endif()
   set_target_properties(${TName} PROPERTIES COMPILE_FLAGS ${r8_flags})
   target_link_libraries(${TName} PUBLIC FMS::fms
                                  PRIVATE testLibs
@@ -826,7 +836,9 @@ foreach (testFile ${TEST_SRC_MULTI_TARGET})
   get_filename_component (TName ${testFile} NAME_WE)
 
   add_executable(${TName}_r8 ${testFile})
-  target_compile_definitions(${TName}_r8 PRIVATE "${r8_defs}")
+  if(r8_defs)
+    target_compile_definitions(${TName}_r8 PRIVATE "${r8_defs}")
+  endif()
   set_target_properties(${TName}_r8 PROPERTIES COMPILE_FLAGS ${r8_flags})
   target_link_libraries(${TName}_r8 PUBLIC FMS::fms
                                     PRIVATE testLibs
