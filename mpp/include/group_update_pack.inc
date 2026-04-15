@@ -17,13 +17,20 @@
 !* License along with FMS.  If not, see <http://www.gnu.org/licenses/>.
 !***********************************************************************
 
+#ifdef __NVCOMPILER_OPENMP_GPU
+   print *, "pack gpu, use_device_ptr: ", use_device_ptr
+#else
+   print *, "pack cpu, use_device_ptr: ", use_device_ptr
+#endif
+
 if( group%k_loop_inside ) then
 #ifndef __NVCOMPILER_OPENMP_GPU
-!$OMP parallel do default(none) shared(npack,group,ptr,nvector,ksize,buffer_start_pos) &
+!$OMP parallel do default(shared) shared(npack,group,ptr,nvector,ksize,buffer_start_pos) &
 !$OMP                          private(buffer_pos,pos,m,is,ie,js,je,rotation, &
-!$OMP                                  ptr_field, ptr_fieldx, ptr_fieldy,n,k,ni,nj,idx)
+!$OMP                                  ptr_field, ptr_fieldx, ptr_fieldy,n,i,j,k,ni,nj,idx)
 #endif
   do n = 1, npack
+     print *, n
      buffer_pos = group%pack_buffer_pos(n) + buffer_start_pos
      pos  = buffer_pos
      is = group%pack_is(n); ie = group%pack_ie(n); ni = ie-is+1
@@ -33,6 +40,7 @@ if( group%k_loop_inside ) then
         select case( rotation )
         case(ZERO)
            do l=1, group%nscalar  ! loop over number of fields
+           print *, l
               ptr_field = group%addrs_s(l)
 #ifdef __NVCOMPILER_OPENMP_GPU
               !$omp target teams distribute parallel do collapse(3) private(idx) &
@@ -44,11 +52,18 @@ if( group%k_loop_inside ) then
                  do j = js, je
                     do i = is, ie
                        idx = pos + (k-1)*nj*ni + (j-js)*ni + (i-is) + 1
+#ifndef __NVCOMPILER_OPENMP_GPU
+print *, idx, field(i,j,k)
+#endif
                        buffer(idx) = field(i,j,k)
+#ifndef __NVCOMPILER_OPENMP_GPU
+print *, idx, "part 2 electric boogaloo"
+#endif
                     end do
                  end do
               enddo
               pos = pos + ksize*nj*ni
+              print *, pos
            enddo
         case( MINUS_NINETY )
            do l=1,group%nscalar  ! loop over number of fields
@@ -660,3 +675,4 @@ else
      endif
   enddo
 endif
+print *, "end pack"

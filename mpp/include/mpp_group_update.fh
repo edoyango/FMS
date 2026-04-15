@@ -481,9 +481,6 @@ subroutine MPP_DO_GROUP_UPDATE_(group, domain, d_type, omp_offload)
 
   !---pre-post receive.
   call mpp_clock_begin(group_recv_clock)
-#ifdef __NVCOMPILER_OPENMP_GPU
-  !$omp target enter data map(alloc: buffer) if(use_device_ptr)
-#endif
   do m = 1, nrecv
      msgsize = group%recv_size(m)
      from_pe = group%from_pe(m)
@@ -503,7 +500,20 @@ subroutine MPP_DO_GROUP_UPDATE_(group, domain, d_type, omp_offload)
   call mpp_clock_begin(group_pack_clock)
   !pack the data
   buffer_start_pos = 0
+
+#ifdef __NVCOMPILER_OPENMP_GPU
+  if (use_device_ptr) then
+   !$omp target enter data map(alloc: buffer)
 #include <group_update_pack.inc>
+  else
+#undef __NVCOMPILER_OPENMP_GPU
+#include <group_update_pack.inc>
+  endif
+#define __NVCOMPILER_OPENMP_GPU
+#else
+#include <group_update_pack.inc>
+#endif
+
   call mpp_clock_end(group_pack_clock)
 
   call mpp_clock_begin(group_send_clock)
@@ -526,9 +536,17 @@ subroutine MPP_DO_GROUP_UPDATE_(group, domain, d_type, omp_offload)
   !---unpack the buffer
   nunpack = group%nunpack
   call mpp_clock_begin(group_unpk_clock)
-#include <group_update_unpack.inc>
 #ifdef __NVCOMPILER_OPENMP_GPU
-  !$omp target exit data map(release: buffer) if(use_device_ptr)
+  if (use_device_ptr) then
+#include <group_update_unpack.inc>
+    !$omp target exit data map(release: buffer)
+  else
+#undef __NVCOMPILER_OPENMP_GPU
+#include <group_update_unpack.inc>
+  endif
+#define __NVCOMPILER_OPENMP_GPU
+#else
+#include <group_update_unpack.inc>
 #endif
   call mpp_clock_end(group_unpk_clock)
 
@@ -738,7 +756,17 @@ subroutine MPP_START_GROUP_UPDATE_(group, domain, d_type, reuse_buffer)
   call mpp_clock_begin(nonblock_group_pack_clock)
   npack = group%npack
   buffer_start_pos = group%buffer_start_pos
+#ifdef __NVCOMPILER_OPENMP_GPU
+  if (use_device_ptr) then
 #include <group_update_pack.inc>
+  else
+#undef __NVCOMPILER_OPENMP_GPU
+#include <group_update_pack.inc>
+  endif
+#define __NVCOMPILER_OPENMP_GPU
+#else
+#include <group_update_pack.inc>
+#endif
   call mpp_clock_end(nonblock_group_pack_clock)
 
   call mpp_clock_begin(nonblock_group_send_clock)
@@ -807,7 +835,17 @@ subroutine MPP_COMPLETE_GROUP_UPDATE_(group, domain, d_type)
 
   call mpp_clock_begin(nonblock_group_unpk_clock)
   buffer_start_pos = group%buffer_start_pos
+#ifdef __NVCOMPILER_OPENMP_GPU
+  if (use_device_ptr) then
 #include <group_update_unpack.inc>
+  else
+#undef __NVCOMPILER_OPENMP_GPU
+#include <group_update_unpack.inc>
+  endif
+#define __NVCOMPILER_OPENMP_GPU
+#else
+#include <group_update_unpack.inc>
+#endif
   call mpp_clock_end(nonblock_group_unpk_clock)
 
   ! ---northern boundary fold

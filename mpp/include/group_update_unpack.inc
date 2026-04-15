@@ -16,7 +16,11 @@
 !* You should have received a copy of the GNU Lesser General Public
 !* License along with FMS.  If not, see <http://www.gnu.org/licenses/>.
 !***********************************************************************
-
+#ifdef __NVCOMPILER_OPENMP_GPU
+   print *, "unpack gpu, use_device_ptr: ", use_device_ptr
+#else
+   print *, "unpack cpu, use_device_ptr: ", use_device_ptr
+#endif
 if( group%k_loop_inside ) then
 #ifndef __NVCOMPILER_OPENMP_GPU
 !$OMP parallel do default(none) shared(nunpack,group,nscalar,ptr,nvector,ksize,buffer_start_pos) &
@@ -145,3 +149,5 @@ else
      endif
   enddo
 endif
+
+print *, "end unpack"
