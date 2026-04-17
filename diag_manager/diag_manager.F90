@@ -1244,6 +1244,7 @@ END FUNCTION register_static_field
           END IF
        END DO
     END IF
+    !$omp target enter data map(to: output_fields(out_num), output_fields(out_num)%buffer)
   END FUNCTION register_static_field_old
 
   !> @brief Return the diagnostic field ID of a given variable.
@@ -1762,6 +1763,7 @@ END FUNCTION register_static_field
 
     ! First copy the data to a three d array
     ALLOCATE(field_out(SIZE(field,1),SIZE(field,2),SIZE(field,3)), STAT=status)
+    !$omp target enter data map(alloc: field_out)
     IF ( status .NE. 0 ) THEN
        WRITE (err_msg_local, FMT='("Unable to allocate field_out(",I5,",",I5,",",I5,"). (STAT: ",I5,")")')&
             & SIZE(field,1), SIZE(field,2), SIZE(field,3), status
@@ -1769,9 +1771,23 @@ END FUNCTION register_static_field
     END IF
     SELECT TYPE (field)
     TYPE IS (real(kind=r4_kind))
-       field_out = field
+       !$omp target teams loop collapse(3) map(to: field)
+       do k=1,size(field,3)
+          do j=1,size(field,2)
+             do i=1,size(field,1)
+                field_out(i,j,k) = field(i,j,k)
+             enddo
+          enddo
+       enddo
     TYPE IS (real(kind=r8_kind))
-       field_out = real(field)
+       !$omp target teams loop collapse(3) map(to: field)
+       do k=1,size(field,3)
+          do j=1,size(field,2)
+             do i=1,size(field,1)
+                field_out(i,j,k) = real(field(i,j,k))
+             enddo
+          enddo
+       enddo
     CLASS DEFAULT
        CALL error_mesg ('diag_manager_mod::send_data_3d',&
             & 'The field is not one of the supported types (real(kind=4) or real(kind=8)). '//&
@@ -1839,6 +1855,7 @@ END FUNCTION register_static_field
     IF ( PRESENT(ie_in) ) THEN
        IF ( .NOT.PRESENT(is_in) ) THEN
           IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'ie_in present without is_in', err_msg) ) THEN
+             !$omp target exit data map(release: field_out)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1847,6 +1864,7 @@ END FUNCTION register_static_field
        IF ( PRESENT(js_in) .AND. .NOT.PRESENT(je_in) ) THEN
           IF ( fms_error_handler('diag_manager_modsend_data_3d',&
                & 'is_in and ie_in present, but js_in present without je_in', err_msg) ) THEN
+             !$omp target exit data map(release: field_out)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1856,6 +1874,7 @@ END FUNCTION register_static_field
     IF ( PRESENT(je_in) ) THEN
        IF ( .NOT.PRESENT(js_in) ) THEN
           IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'je_in present without js_in', err_msg) ) THEN
+             !$omp target exit data map(release: field_out)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1864,6 +1883,7 @@ END FUNCTION register_static_field
        IF ( PRESENT(is_in) .AND. .NOT.PRESENT(ie_in) ) THEN
           IF ( fms_error_handler('diag_manager_mod::send_data_3d',&
                & 'js_in and je_in present, but is_in present without ie_in', err_msg)) THEN
+             !$omp target exit data map(release: field_out)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1891,6 +1911,7 @@ END FUNCTION register_static_field
     IF ( MOD(twohi,2) /= 0 ) THEN
        IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'non-symmetric halos in first dimension', &
           & err_msg) ) THEN
+          !$omp target exit data map(release: field_out)
           DEALLOCATE(field_out)
           DEALLOCATE(oor_mask)
           RETURN
@@ -1900,6 +1921,7 @@ END FUNCTION register_static_field
     IF ( MOD(twohj,2) /= 0 ) THEN
        IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'non-symmetric halos in second dimension', &
           & err_msg) ) THEN
+          !$omp target exit data map(release: field_out)
           DEALLOCATE(field_out)
           DEALLOCATE(oor_mask)
           RETURN
@@ -2096,6 +2118,7 @@ END FUNCTION register_static_field
                 & TRIM(output_fields(out_num)%output_name)
              IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                 & ', time must be present when output frequency = EVERY_TIME', err_msg)) THEN
+                !$omp target exit data map(release: field_out)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -2108,6 +2131,7 @@ END FUNCTION register_static_field
                & TRIM(output_fields(out_num)%output_name)
           IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                & ', time must be present for nonstatic field', err_msg)) THEN
+             !$omp target exit data map(release: field_out)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -2128,6 +2152,7 @@ END FUNCTION register_static_field
                            & TRIM(output_fields(out_num)%output_name)
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//&
                            & TRIM(error_string)//' is skipped one time level in output data', err_msg)) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -2140,6 +2165,7 @@ END FUNCTION register_static_field
                    IF ( mpp_pe() .EQ. mpp_root_pe() ) THEN
                       IF(fms_error_handler('diag_manager_mod::send_data_3d','module/output_field '//TRIM(error_string)&
                            & //', write EMPTY buffer', err_msg)) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -2160,6 +2186,7 @@ END FUNCTION register_static_field
           CALL check_bounds_are_exact_dynamic(out_num, diag_field_id, Time, err_msg=err_msg_local)
           IF ( err_msg_local /= '' ) THEN
              IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                !$omp target exit data map(release: field_out)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -2199,6 +2226,7 @@ END FUNCTION register_static_field
             IF (mf_result .eqv. .FALSE.) THEN
               DEALLOCATE(ofield_index_cfg)
               DEALLOCATE(ofield_cfg)
+               !$omp target exit data map(release: field_out)
                DEALLOCATE(field_out)
                DEALLOCATE(oor_mask)
                RETURN
@@ -2209,6 +2237,7 @@ END FUNCTION register_static_field
           CALL check_bounds_are_exact_static(out_num, diag_field_id, err_msg=err_msg_local)
           IF ( err_msg_local /= '' ) THEN
               IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg)) THEN
+                !$omp target exit data map(release: field_out)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -2255,6 +2284,7 @@ END FUNCTION register_static_field
                      & TRIM(output_fields(out_num)%output_name)
                 IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                      & ', regional output NOT supported with mask_variant', err_msg)) THEN
+                   !$omp target exit data map(release: field_out)
                    DEALLOCATE(field_out)
                    DEALLOCATE(oor_mask)
                    RETURN
@@ -2371,6 +2401,7 @@ END FUNCTION register_static_field
                         & TRIM(output_fields(out_num)%output_name)
                    IF(fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                         & ', variable mask but no missing value defined', err_msg)) THEN
+                      !$omp target exit data map(release: field_out)
                       DEALLOCATE(field_out)
                       DEALLOCATE(oor_mask)
                       RETURN
@@ -2382,6 +2413,7 @@ END FUNCTION register_static_field
                      & TRIM(output_fields(out_num)%output_name)
                 IF(fms_error_handler('diag_manager_mod::send_data_3d','module/output_field '//TRIM(error_string)//&
                      & ', variable mask but no mask given', err_msg)) THEN
+                   !$omp target exit data map(release: field_out)
                    DEALLOCATE(field_out)
                    DEALLOCATE(oor_mask)
                    RETURN
@@ -2671,6 +2703,7 @@ END FUNCTION register_static_field
                          CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                          IF ( err_msg_local /= '') THEN
                             IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                               !$omp target exit data map(release: field_out)
                                DEALLOCATE(field_out)
                                DEALLOCATE(oor_mask)
                                RETURN
@@ -2858,6 +2891,7 @@ END FUNCTION register_static_field
                          CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                          IF ( err_msg_local /= '' ) THEN
                             IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                               !$omp target exit data map(release: field_out)
                                DEALLOCATE(field_out)
                                DEALLOCATE(oor_mask)
                                RETURN
@@ -2885,7 +2919,8 @@ END FUNCTION register_static_field
                             END DO
                          END DO
                       ELSE
-!$OMP CRITICAL
+!!$OMP CRITICAL
+                        !$omp target teams loop collapse(3) map(tofrom: output_fields(out_num), output_fields(out_num)%buffer, field_out)
                          DO k=ks, ke
                             DO j=js, je
                                DO i=is, ie
@@ -2905,7 +2940,7 @@ END FUNCTION register_static_field
                                END DO
                             END DO
                          END DO
-!$OMP END CRITICAL
+!!$OMP END CRITICAL
                       END IF
 !$OMP CRITICAL
                       outer1: DO k=ks, ke
@@ -3009,6 +3044,7 @@ END FUNCTION register_static_field
                          CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                          IF ( err_msg_local /= '' ) THEN
                             IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                               !$omp target exit data map(release: field_out)
                                DEALLOCATE(field_out)
                                DEALLOCATE(oor_mask)
                                RETURN
@@ -3087,6 +3123,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3127,6 +3164,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3171,6 +3209,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3211,6 +3250,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3256,6 +3296,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3295,6 +3336,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         !$omp target exit data map(release: field_out)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3331,13 +3373,22 @@ END FUNCTION register_static_field
                 CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                 IF ( err_msg_local /= '' ) THEN
                    IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                      !$omp target exit data map(release: field_out)
                       DEALLOCATE(field_out)
                       DEALLOCATE(oor_mask)
                       RETURN
                    END IF
                 END IF
              END IF
-             output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) = field_out(f1:f2,f3:f4,ks:ke)
+             !$omp target teams loop collapse(3) map(to: output_fields(out_num), field_out) map(from: output_fields(out_num)%buffer(:,:,:,sample))
+             do k=ks,ke
+                do j=js-hj,je-hj
+                   do i=is-hi,ie-hi
+                      output_fields(out_num)%buffer(i,j,k,sample) = field_out(i-is+hi+f1,j-js+hj+f3,k)
+                   enddo
+                enddo
+             enddo
+            !  output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) = field_out(f1:f2,f3:f4,ks:ke)
           END IF
 
           IF ( PRESENT(mask) .AND. missvalue_present ) THEN
@@ -3385,6 +3436,7 @@ END FUNCTION register_static_field
           CALL check_bounds_are_exact_static(out_num, diag_field_id, err_msg=err_msg_local)
           IF ( err_msg_local /= '' ) THEN
              IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg)) THEN
+                !$omp target exit data map(release: field_out)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -3472,6 +3524,7 @@ END FUNCTION register_static_field
                    END DO
                 END DO
              TYPE IS (real(kind=r8_kind))
+                !$omp target teams loop collapse(3) map(to: output_fields(out_num), rmask) map(tofrom: output_fields(out_num)%buffer(:,:,:,sample))
                 DO k=ks, ke
                    DO j=js, je
                       DO i=is, ie
@@ -3488,7 +3541,7 @@ END FUNCTION register_static_field
        END IF
 
     END DO num_out_fields
-
+    !$omp target exit data map(release: field_out)
     DEALLOCATE(field_out)
     DEALLOCATE(oor_mask)
   endIF modern_if
@@ -3750,6 +3803,10 @@ END FUNCTION register_static_field
     units = files(file_num)%output_units
 
     ! If average get size: Average intervals are last_output, next_output
+    b1=SIZE(output_fields(out_num)%buffer,1)
+    b2=SIZE(output_fields(out_num)%buffer,2)
+    b3=SIZE(output_fields(out_num)%buffer,3)
+    b4=SIZE(output_fields(out_num)%buffer,4)
     IF ( average ) THEN
        b1=SIZE(output_fields(out_num)%buffer,1)
        b2=SIZE(output_fields(out_num)%buffer,2)
@@ -3785,6 +3842,7 @@ END FUNCTION register_static_field
              END IF
              IF ( num > 0. ) THEN
                 IF ( missvalue_present ) THEN
+                   !$omp target teams loop collapse(3) map(to: output_fields(out_num))
                    DO k=1, b3
                       DO j=1, b2
                          DO i=1, b1
@@ -3797,9 +3855,24 @@ END FUNCTION register_static_field
                       END DO
                    END DO
                 ELSE
-                   output_fields(out_num)%buffer(:,:,:,m) = output_fields(out_num)%buffer(:,:,:,m)/num
-                   IF ( time_rms ) output_fields(out_num)%buffer(:,:,:,m) =&
-                        & SQRT(output_fields(out_num)%buffer(:,:,:,m))
+                   !$omp target teams loop collapse(3) map(to: output_fields(out_num))
+                   DO k=1, b3
+                      DO j=1, b2
+                         DO i=1, b1
+                            output_fields(out_num)%buffer(i,j,k,m) = output_fields(out_num)%buffer(i,j,k,m)/num
+                         END DO
+                      END DO
+                   END DO
+                   IF ( time_rms ) THEN
+                      !$omp target teams loop collapse(3) map(to: output_fields(out_num))
+                      DO k=1, b3
+                         DO j=1, b2
+                            DO i=1, b1
+                               output_fields(out_num)%buffer(i,j,k,m) = SQRT(output_fields(out_num)%buffer(i,j,k,m))
+                            END DO
+                         END DO
+                      END DO
+                   END IF
                 END IF
              ELSE IF ( .NOT. at_diag_end ) THEN
                 IF ( missvalue_present ) THEN
@@ -3821,7 +3894,7 @@ END FUNCTION register_static_field
           END WHERE
        END IF ! if missvalue is NOT present buffer retains max_value or min_value
     END IF !average
-
+    !$omp target update from(output_fields(out_num)%buffer)
     ! Output field
     IF ( at_diag_end .AND. freq == END_OF_RUN ) output_fields(out_num)%next_output = time
 ! if (time .eq. output_fields(out_num)%next_output) then
@@ -3860,11 +3933,38 @@ END FUNCTION register_static_field
        output_fields(out_num)%count_0d(:) = 0.0
        output_fields(out_num)%num_elements(:) = 0
        IF ( time_max ) THEN
-          output_fields(out_num)%buffer = MAX_VALUE
+          !$omp target teams loop collapse(4) map(to: output_fields(out_num))
+          DO m=1, b4
+             DO k=1, b3
+                DO j=1, b2
+                   DO i=1, b1
+                      output_fields(out_num)%buffer(i,j,k,m) = MAX_VALUE
+                   END DO
+                END DO
+             END DO
+          END DO
        ELSE IF ( time_min ) THEN
-          output_fields(out_num)%buffer = MIN_VALUE
+          !$omp target teams loop collapse(4) map(to: output_fields(out_num))
+          DO m=1, b4
+             DO k=1, b3
+                DO j=1, b2
+                   DO i=1, b1
+                      output_fields(out_num)%buffer(i,j,k,m) = MIN_VALUE
+                   END DO
+                END DO
+             END DO
+          END DO
        ELSE
-          output_fields(out_num)%buffer = EMPTY
+          !$omp target teams loop collapse(4) map(to: output_fields(out_num))
+          DO m=1, b4
+             DO k=1, b3
+                DO j=1, b2
+                   DO i=1, b1
+                      output_fields(out_num)%buffer(i,j,k,m) = EMPTY
+                   END DO
+                END DO
+             END DO
+          END DO
        END IF
        IF ( input_fields(in_num)%mask_variant .AND. average ) output_fields(out_num)%counter = 0.0
     END IF
