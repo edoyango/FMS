@@ -50,9 +50,10 @@
                               data_ijshift%lb(2):data_ijshift%ub(2), \
                               data_ijshift%lb(3):data_ijshift%ub(3)
 
-  subroutine TEST_GROUP_UPDATE_ (type, p)
+  subroutine TEST_GROUP_UPDATE_ (type, p, use_omp_offload)
     character(len=*), intent(in) :: type !< Name of the test to run
     integer, intent(in) :: p !< Permutation of array indices (ranges from 1 to 3!)
+    logical, intent(in) :: use_omp_offload
 
     real(FMS_TEST_KIND_), parameter :: zero = 0
     type(domain2D) :: domain
@@ -79,6 +80,8 @@
     type(permutable_indices_3d) :: mem, mem_ishift, mem_jshift, mem_ijshift, &
                                    compute, compute_ishift, compute_jshift, compute_ijshift, compute_halo, &
                                    data, data_ishift, data_jshift, data_ijshift
+
+    print *, "testing group updates with omp_offload=", use_omp_offload
 
     folded_north       = .false.
     cubic_grid         = .false.
@@ -263,7 +266,7 @@
     enddo
 
     a2 = a1
-    call mpp_do_group_update(group_update, domain, zero)
+    call mpp_do_group_update(group_update, domain, zero, omp_offload=use_omp_offload)
 
     do l = 1, num_fields
        call mpp_update_domains( a2(:,:,:,l), domain, flags=WUPDATE+SUPDATE, complete=l==num_fields )
@@ -332,7 +335,7 @@
        enddo
        a2 = a1; x2 = x1; y2 = y1
        call mpp_clock_begin(id1)
-       call mpp_do_group_update(group_update, domain, zero)
+       call mpp_do_group_update(group_update, domain, zero, omp_offload=use_omp_offload)
        call mpp_clock_end  (id1)
 
        call mpp_clock_begin(id2)
@@ -444,7 +447,7 @@
     y2 = y1
 
     call mpp_clock_begin(id1)
-    call mpp_do_group_update(group_update, domain, zero)
+    call mpp_do_group_update(group_update, domain, zero, omp_offload=use_omp_offload)
     call mpp_clock_end  (id1)
 
     call mpp_clock_begin(id2)
@@ -505,7 +508,7 @@
        y2 = y1
 
        call mpp_clock_begin(id1)
-       call mpp_do_group_update(group_update, domain, zero)
+       call mpp_do_group_update(group_update, domain, zero, omp_offload=use_omp_offload)
        call mpp_clock_end  (id1)
 
        call mpp_clock_begin(id2)
