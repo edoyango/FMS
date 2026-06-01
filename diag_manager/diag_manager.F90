@@ -3527,7 +3527,11 @@ END FUNCTION register_static_field
 
     !< The error checking is done in accept_data
     if (present(mask)) mask_local = mask
-    if (present(rmask)) rmask_local = rmask
+    if (present(rmask)) then
+      call mpp_error(NOTE, "DEBUG POLY_COPY send_data_4d: before rmask copy")
+      rmask_local = rmask
+      call mpp_error(NOTE, "DEBUG POLY_COPY send_data_4d: after rmask copy")
+    endif
 
     call fms_diag_object%fms_diag_accept_data(diag_field_id, field, mask_local, rmask_local, &
                                                           time, is_in, js_in, ks_in, ie_in, je_in, ke_in, weight, &

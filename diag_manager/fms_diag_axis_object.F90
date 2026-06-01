@@ -236,9 +236,11 @@ module fms_diag_axis_object_mod
       call mpp_error(NOTE, "DEBUG register_diag_axis_obj: axis_data is r8, allocating")
       allocate(real(kind=r8_kind) :: this%axis_data(axis_length))
       call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r8 allocate done, copying")
+      call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_axis_obj: r8 before copy "//trim(axis_name))
       do i=1,size(axis_data)
         this%axis_data(i) = axis_data(i)
       end do
+      call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_axis_obj: r8 after copy "//trim(axis_name))
       call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r8 copy done")
       this%length = axis_length
       this%type_of_data = "double" !< This is what fms2_io expects in the register_field call
@@ -246,7 +248,9 @@ module fms_diag_axis_object_mod
       call mpp_error(NOTE, "DEBUG register_diag_axis_obj: axis_data is r4, allocating")
       allocate(real(kind=r4_kind) :: this%axis_data(axis_length))
       call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r4 allocate done, copying")
+      call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_axis_obj: r4 before copy "//trim(axis_name))
       this%axis_data = axis_data
+      call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_axis_obj: r4 after copy "//trim(axis_name))
       call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r4 copy done")
       this%length = axis_length
       this%type_of_data = "float" !< This is what fms2_io expects in the register_field call

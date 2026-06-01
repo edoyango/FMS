@@ -234,17 +234,25 @@ subroutine get_buffer (this, buff_out, field_name)
 
   select type (buff=>this%buffer)
     type is (real(r4_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: r4 before copy "//trim(field_name))
       allocate(real(r4_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
       buff_out = buff
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: r4 after copy "//trim(field_name))
     type is (real(r8_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: r8 before copy "//trim(field_name))
       allocate(real(r8_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
       buff_out = buff
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: r8 after copy "//trim(field_name))
     type is (integer(i4_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: i4 before copy "//trim(field_name))
       allocate(integer(i4_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
       buff_out = buff
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: i4 after copy "//trim(field_name))
     type is (integer(i8_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: i8 before copy "//trim(field_name))
       allocate(integer(i8_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
       buff_out = buff
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_buffer: i8 after copy "//trim(field_name))
     class default
       call mpp_error(FATAL, "get_buffer: buffer allocated to invalid type(must be integer or real, kind size 4 or 8)."&
                             //"field name: "// field_name)
@@ -517,7 +525,9 @@ subroutine write_buffer_wrapper_netcdf(this, fms2io_fileobj, unlim_dim_level, is
   if( using_diurnal ) then
     call this%get_remapped_diurnal_data(buff_ptr)
   else
+    call mpp_error(NOTE, "DEBUG POLY_COPY write_buffer_wrapper_netcdf: before buffer copy")
     buff_ptr = this%buffer
+    call mpp_error(NOTE, "DEBUG POLY_COPY write_buffer_wrapper_netcdf: after buffer copy")
   endif
 
   varname = diag_yaml%diag_fields(this%yaml_id)%get_var_outname()
@@ -554,7 +564,9 @@ subroutine write_buffer_wrapper_domain(this, fms2io_fileobj, unlim_dim_level, is
   if( using_diurnal ) then
     call this%get_remapped_diurnal_data(buff_ptr)
   else
+    call mpp_error(NOTE, "DEBUG POLY_COPY write_buffer_wrapper_domain: before buffer copy")
     buff_ptr = this%buffer
+    call mpp_error(NOTE, "DEBUG POLY_COPY write_buffer_wrapper_domain: after buffer copy")
   endif
 
   varname = diag_yaml%diag_fields(this%yaml_id)%get_var_outname()
@@ -591,7 +603,9 @@ subroutine write_buffer_wrapper_u(this, fms2io_fileobj, unlim_dim_level, is_diur
   if( using_diurnal ) then
     call this%get_remapped_diurnal_data(buff_ptr)
   else
+    call mpp_error(NOTE, "DEBUG POLY_COPY write_buffer_wrapper_u: before buffer copy")
     buff_ptr = this%buffer
+    call mpp_error(NOTE, "DEBUG POLY_COPY write_buffer_wrapper_u: after buffer copy")
   endif
 
   varname = diag_yaml%diag_fields(this%yaml_id)%get_var_outname()
@@ -856,7 +870,9 @@ subroutine get_remapped_diurnal_data(this, res)
       ke = this%buffer_dims(3); ze = this%buffer_dims(5)
     case (4)
       ! no need to remap if 4d
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_remapped_diurnal_data: 4d before copy")
       res = this%buffer
+      call mpp_error(NOTE, "DEBUG POLY_COPY get_remapped_diurnal_data: 4d after copy")
       return
   end select
 

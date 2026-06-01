@@ -366,17 +366,25 @@ subroutine fms_register_diag_field_obj &
   if (present(missing_value)) then
     select type (missing_value)
      type is (integer(kind=i4_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing i4 before copy "//trim(varname))
              allocate(integer(kind=i4_kind) :: this%missing_value)
              this%missing_value = missing_value
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing i4 after copy "//trim(varname))
      type is (integer(kind=i8_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing i8 before copy "//trim(varname))
              allocate(integer(kind=i8_kind) :: this%missing_value)
              this%missing_value = missing_value
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing i8 after copy "//trim(varname))
      type is (real(kind=r4_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing r4 before copy "//trim(varname))
              allocate(real(kind=r4_kind) :: this%missing_value)
              this%missing_value = missing_value
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing r4 after copy "//trim(varname))
      type is (real(kind=r8_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing r8 before copy "//trim(varname))
              allocate(real(kind=r8_kind) :: this%missing_value)
              this%missing_value = missing_value
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: missing r8 after copy "//trim(varname))
      class default
              call mpp_error("fms_register_diag_field_obj", &
                      "The missing value passed to register a diagnostic is not a r8, r4, i8, or i4",&
@@ -387,17 +395,25 @@ subroutine fms_register_diag_field_obj &
   if (present(varRANGE)) then
     select type (varRANGE)
      type is (integer(kind=i4_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range i4 before copy "//trim(varname))
              allocate(integer(kind=i4_kind) :: this%data_RANGE(2))
              this%data_RANGE = varRANGE
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range i4 after copy "//trim(varname))
      type is (integer(kind=i8_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range i8 before copy "//trim(varname))
              allocate(integer(kind=i8_kind) :: this%data_RANGE(2))
              this%data_RANGE = varRANGE
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range i8 after copy "//trim(varname))
      type is (real(kind=r4_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range r4 before copy "//trim(varname))
              allocate(integer(kind=r4_kind) :: this%data_RANGE(2))
              this%data_RANGE = varRANGE
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range r4 after copy "//trim(varname))
      type is (real(kind=r8_kind))
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range r8 before copy "//trim(varname))
              allocate(integer(kind=r8_kind) :: this%data_RANGE(2))
              this%data_RANGE = varRANGE
+             call mpp_error(NOTE, "DEBUG POLY_COPY register_diag_field_obj: range r8 after copy "//trim(varname))
      class default
              call mpp_error("fms_register_diag_field_obj", &
                      "The varRange passed to register a diagnostic is not a r8, r4, i8, or i4",&

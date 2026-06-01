@@ -53,7 +53,7 @@ use platform_mod
   USE mpp_domains_mod, ONLY: domain1d, domain2d, domainUG
   USE fms_mod, ONLY: write_version_number
   USE fms_diag_bbox_mod, ONLY: fmsDiagIbounds_type
-  use mpp_mod, ONLY: mpp_error, FATAL, WARNING, mpp_pe, mpp_root_pe, stdlog
+  use mpp_mod, ONLY: mpp_error, FATAL, WARNING, NOTE, mpp_pe, mpp_root_pe, stdlog
 
   ! NF90_FILL_REAL has value of 9.9692099683868690e+36.
   USE netcdf, ONLY: NF_FILL_REAL => NF90_FILL_REAL
@@ -572,23 +572,33 @@ CONTAINS
     this%att_name = att_name
     select type (att_value)
     type is (integer(kind=i4_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: i4 before copy "//trim(att_name))
       allocate(integer(kind=i4_kind) :: this%att_value(natt))
       this%att_value = att_value
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: i4 after copy "//trim(att_name))
     type is (integer(kind=i8_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: i8 before copy "//trim(att_name))
       allocate(integer(kind=i8_kind) :: this%att_value(natt))
       this%att_value = att_value
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: i8 after copy "//trim(att_name))
     type is (real(kind=r4_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: r4 before copy "//trim(att_name))
       allocate(real(kind=r4_kind) :: this%att_value(natt))
       this%att_value = att_value
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: r4 after copy "//trim(att_name))
     type is (real(kind=r8_kind))
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: r8 before copy "//trim(att_name))
       allocate(real(kind=r8_kind) :: this%att_value(natt))
       this%att_value = att_value
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: r8 after copy "//trim(att_name))
     type is (character(len=*))
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: char before copy "//trim(att_name))
       allocate(character(len=len(att_value)) :: this%att_value(natt))
       select type(aval => this%att_value)
         type is (character(len=*))
           aval = att_value
       end select
+      call mpp_error(NOTE, "DEBUG POLY_COPY fms_add_attribute: char after copy "//trim(att_name))
     end select
   end subroutine fms_add_attribute
 
