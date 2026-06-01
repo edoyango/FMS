@@ -41,8 +41,7 @@ use fms_yaml_output_mod, only: fmsYamlOutKeys_type, fmsYamlOutValues_type, write
                                yaml_out_add_level2key, initialize_key_struct, initialize_val_struct
 use mpp_mod,         only: mpp_error, FATAL, NOTE, mpp_pe, mpp_root_pe, stdout
 use, intrinsic :: iso_c_binding, only : c_ptr, c_null_char
-use fms_string_utils_mod, only: fms_array_to_pointer, fms_find_my_string, fms_sort_this, fms_find_unique, string, &
-                                fms_f2c_string
+use fms_string_utils_mod, only: string, fms_f2c_string
 use platform_mod, only: r4_kind, i4_kind, r8_kind, i8_kind, FMS_FILE_LEN
 use fms_mod, only: lowercase
 use fms_diag_time_utils_mod, only: set_time_type
@@ -600,10 +599,9 @@ subroutine diag_yaml_object_init(diag_subset_output)
 
   call mpp_error(NOTE, "DEBUG nfiles_loop: all files done, sorting")
   !> Sort the file list in alphabetical order
-  file_list%file_pointer = fms_array_to_pointer(file_list%file_name)
-  call mpp_error(NOTE, "DEBUG sorting: calling fms_sort_this for file_list")
-  call fms_sort_this(file_list%file_pointer, actual_num_files, file_list%diag_file_indices)
-  call mpp_error(NOTE, "DEBUG sorting: fms_sort_this for file_list done")
+  call mpp_error(NOTE, "DEBUG sorting: calling sort_file_list")
+  call sort_file_list()
+  call mpp_error(NOTE, "DEBUG sorting: sort_file_list done")
 
   call mpp_error(NOTE, "DEBUG sorting: total_nvars="//trim(string(total_nvars))// &
                  " var_count="//trim(string(var_count)))
@@ -612,10 +610,9 @@ subroutine diag_yaml_object_init(diag_subset_output)
                    trim(diag_yaml%diag_fields(i)%var_varname)//":"// &
                    trim(diag_yaml%diag_fields(i)%var_module))
   enddo
-  variable_list%var_pointer = fms_array_to_pointer(variable_list%var_name)
-  call mpp_error(NOTE, "DEBUG sorting: calling fms_sort_this for variable_list")
-  call fms_sort_this(variable_list%var_pointer, total_nvars, variable_list%diag_field_indices)
-  call mpp_error(NOTE, "DEBUG sorting: fms_sort_this for variable_list done")
+  call mpp_error(NOTE, "DEBUG sorting: calling sort_variable_list")
+  call sort_variable_list()
+  call mpp_error(NOTE, "DEBUG sorting: sort_variable_list done")
 
   deallocate(diag_file_ids)
   diag_yaml_module_initialized = .true.
@@ -649,6 +646,153 @@ subroutine diag_yaml_object_end()
   if(allocated(variable_list%diag_field_indices)) deallocate(variable_list%diag_field_indices)
 
 end subroutine diag_yaml_object_end
+
+!> @brief Return the Fortran-visible portion of a C-terminated string buffer.
+function yaml_string_key(buffer) result(key)
+  character(len=*), intent(in) :: buffer
+  character(len=:), allocatable :: key
+
+  integer :: null_index
+
+  null_index = index(buffer, c_null_char)
+  if (null_index .eq. 1) then
+    key = ""
+  elseif (null_index .gt. 1) then
+    key = buffer(:null_index-1)
+  else
+    key = trim(buffer)
+  endif
+end function yaml_string_key
+
+!> @brief Compare YAML lookup strings using their C-terminated contents.
+logical function yaml_string_less(lhs, rhs)
+  character(len=*), intent(in) :: lhs
+  character(len=*), intent(in) :: rhs
+
+  yaml_string_less = yaml_string_key(lhs) < yaml_string_key(rhs)
+end function yaml_string_less
+
+!> @brief Sort the diagnostic file lookup list by file name.
+subroutine sort_file_list()
+  character(len=FMS_FILE_LEN) :: file_name
+  integer :: diag_file_index
+  integer :: i, j
+
+  if (.not. associated(file_list%file_name)) return
+
+  do i = 2, size(file_list%file_name)
+    file_name = file_list%file_name(i)
+    diag_file_index = file_list%diag_file_indices(i)
+    j = i - 1
+
+    do while (j >= 1)
+      if (.not. yaml_string_less(file_name, file_list%file_name(j))) exit
+      file_list%file_name(j+1) = file_list%file_name(j)
+      file_list%diag_file_indices(j+1) = file_list%diag_file_indices(j)
+      j = j - 1
+    enddo
+
+    file_list%file_name(j+1) = file_name
+    file_list%diag_file_indices(j+1) = diag_file_index
+  enddo
+end subroutine sort_file_list
+
+!> @brief Sort the diagnostic variable lookup list by variable/module name.
+subroutine sort_variable_list()
+  character(len=255) :: var_name
+  integer :: diag_field_index
+  integer :: i, j
+
+  if (.not. associated(variable_list%var_name)) return
+
+  do i = 2, size(variable_list%var_name)
+    var_name = variable_list%var_name(i)
+    diag_field_index = variable_list%diag_field_indices(i)
+    j = i - 1
+
+    do while (j >= 1)
+      if (.not. yaml_string_less(var_name, variable_list%var_name(j))) exit
+      variable_list%var_name(j+1) = variable_list%var_name(j)
+      variable_list%diag_field_indices(j+1) = variable_list%diag_field_indices(j)
+      j = j - 1
+    enddo
+
+    variable_list%var_name(j+1) = var_name
+    variable_list%diag_field_indices(j+1) = diag_field_index
+  enddo
+end subroutine sort_variable_list
+
+!> @brief Find matching positions in the sorted diagnostic variable lookup list.
+function find_variable_list_name(name) result(indices)
+  character(len=*), intent(in) :: name
+  integer, allocatable :: indices(:)
+
+  integer :: i, nfound
+  character(len=:), allocatable :: name_key
+
+  name_key = yaml_string_key(name)
+  nfound = 0
+
+  if (.not. associated(variable_list%var_name)) then
+    allocate(indices(1))
+    indices = DIAG_NULL
+    return
+  endif
+
+  do i = 1, size(variable_list%var_name)
+    if (yaml_string_key(variable_list%var_name(i)) == name_key) nfound = nfound + 1
+  enddo
+
+  if (nfound .gt. 0) then
+    allocate(indices(nfound))
+    nfound = 0
+    do i = 1, size(variable_list%var_name)
+      if (yaml_string_key(variable_list%var_name(i)) == name_key) then
+        nfound = nfound + 1
+        indices(nfound) = i
+      endif
+    enddo
+  else
+    allocate(indices(1))
+    indices = DIAG_NULL
+  endif
+end function find_variable_list_name
+
+!> @brief Find matching positions in the sorted diagnostic file lookup list.
+function find_file_list_name(name) result(indices)
+  character(len=*), intent(in) :: name
+  integer, allocatable :: indices(:)
+
+  integer :: i, nfound
+  character(len=:), allocatable :: name_key
+
+  name_key = yaml_string_key(name)
+  nfound = 0
+
+  if (.not. associated(file_list%file_name)) then
+    allocate(indices(1))
+    indices = DIAG_NULL
+    return
+  endif
+
+  do i = 1, size(file_list%file_name)
+    if (yaml_string_key(file_list%file_name(i)) == name_key) nfound = nfound + 1
+  enddo
+
+  if (nfound .gt. 0) then
+    allocate(indices(nfound))
+    nfound = 0
+    do i = 1, size(file_list%file_name)
+      if (yaml_string_key(file_list%file_name(i)) == name_key) then
+        nfound = nfound + 1
+        indices(nfound) = i
+      endif
+    enddo
+  else
+    allocate(indices(1))
+    indices = DIAG_NULL
+  endif
+end function find_file_list_name
 
 !> @brief Fills in a diagYamlFiles_type with the contents of a file block in diag_table.yaml
 subroutine fill_in_diag_files(diag_yaml_id, diag_file_id, yaml_fileobj)
@@ -1594,7 +1738,30 @@ end function has_diag_fields
 function get_num_unique_fields() &
   result(nfields)
   integer :: nfields
-  nfields = fms_find_unique(variable_list%var_pointer, size(variable_list%var_pointer))
+  integer :: i
+  character(len=:), allocatable :: current_field
+  character(len=:), allocatable :: previous_field
+
+  if (.not. associated(variable_list%var_name)) then
+    nfields = 0
+    return
+  endif
+
+  if (size(variable_list%var_name) .eq. 0) then
+    nfields = 0
+    return
+  endif
+
+  nfields = 1
+  previous_field = yaml_string_key(variable_list%var_name(1))
+
+  do i = 2, size(variable_list%var_name)
+    current_field = yaml_string_key(variable_list%var_name(i))
+    if (current_field /= previous_field) then
+      nfields = nfields + 1
+      previous_field = current_field
+    endif
+  enddo
 
 end function get_num_unique_fields
 
@@ -1608,8 +1775,7 @@ result(indices)
 
   integer, allocatable :: indices(:)
 
-  indices = fms_find_my_string(variable_list%var_pointer, size(variable_list%var_pointer), &
-                               & lowercase(trim(diag_field_name))//":"//lowercase(trim(module_name)//c_null_char))
+  indices = find_variable_list_name(lowercase(trim(diag_field_name))//":"//lowercase(trim(module_name)))
 end function find_diag_field
 
 !> @brief Gets the diag_field entries corresponding to the indices of the sorted variable_list
@@ -1669,8 +1835,7 @@ function get_diag_files_id(indices) &
     filename = diag_yaml%diag_fields(field_id)%var_fname
 
     !< File indice of that file in the array of list of sorted files
-    file_indices = fms_find_my_string(file_list%file_pointer, size(file_list%file_pointer), &
-      & trim(filename)//c_null_char)
+    file_indices = find_file_list_name(trim(filename))
 
     if (size(file_indices) .ne. 1) &
       & call mpp_error(FATAL, "get_diag_files_id: Error getting the correct number of file indices!"//&
