@@ -130,7 +130,7 @@ contains
   !! @return An array of c pointers
   function fms_array_to_pointer(my_array) &
   result(my_pointer)
-    character(len=*), target :: my_array(:) !!< Array of strings to convert
+    character(len=*), target, contiguous, intent(inout) :: my_array(:) !!< Array of strings to convert
     type(c_ptr), allocatable :: my_pointer(:)
 
     integer :: i !< For do loops

@@ -28,7 +28,7 @@ program test_fms_string_utils
 
   implicit none
 
-  character(len=10), allocatable :: my_array(:) !< Array of strings
+  character(len=10), allocatable, target :: my_array(:) !< Array of strings
   character(len=:), allocatable :: my_sorted_array(:) !< Sorted array of strings
   type(c_ptr), allocatable :: my_pointer(:) !< Array of pointers
   integer, allocatable :: my_ids(:) !< Array of indices
