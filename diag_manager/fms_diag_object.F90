@@ -275,9 +275,11 @@ integer function fms_register_diag_field_obj &
 fms_register_diag_field_obj = DIAG_FIELD_NOT_FOUND
 CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling with -Duse_yaml")
 #else
+  call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: entering "//trim(modname)//"/"//trim(varname))
  diag_field_indices = find_diag_field(varname, modname)
  if (diag_field_indices(1) .eq. diag_null) then
     !< The field was not found in the table, so return DIAG_FIELD_NOT_FOUND
+    call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: not in diag_table, skipping")
     fms_register_diag_field_obj = DIAG_FIELD_NOT_FOUND
     deallocate(diag_field_indices)
     return
@@ -285,6 +287,8 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
 
   this%registered_variables = this%registered_variables + 1
   fms_register_diag_field_obj = this%registered_variables
+  call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: registered_variables="// &
+                 trim(string(this%registered_variables)))
 
   call this%FMS_diag_fields(this%registered_variables)%&
     &setID(this%registered_variables)
@@ -300,14 +304,17 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
   fieldptr%buffer_ids = get_diag_field_ids(diag_field_indices)
 
 !> Register the data for the field
+  call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: calling fieldptr%register")
   call fieldptr%register(modname, varname, diag_field_indices, this%diag_axis, &
        axes=axes, longname=longname, units=units, missing_value=missing_value, varRange= varRange, &
        mask_variant= mask_variant, standname=standname, do_not_log=do_not_log, err_msg=err_msg, &
        interp_method=interp_method, tile_count=tile_count, area=area, volume=volume, realm=realm, &
        static=static, multiple_send_data=multiple_send_data)
+  call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: fieldptr%register done")
 
 !> Add the axis information, initial time, and field IDs to the files
   if (present(axes) .and. present(init_time)) then
+    call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: adding axes+init_time to files")
     do i = 1, size(file_ids)
      fileptr => this%FMS_diag_files(file_ids(i))%FMS_diag_file
      call fileptr%add_field_and_yaml_id(fieldptr%get_id(), diag_field_indices(i))
@@ -317,28 +324,38 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
      else
        call fileptr%set_file_domain(fieldptr%get_domain(), fieldptr%get_type_of_domain())
      endif
+     call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: file "//trim(string(i))// &
+                    " init_diurnal_axis")
      call fileptr%init_diurnal_axis(this%diag_axis, this%registered_axis, diag_field_indices(i))
+     call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: file "//trim(string(i))//" add_axes")
      call fileptr%add_axes(axes, this%diag_axis, this%registered_axis, diag_field_indices(i), &
        fieldptr%buffer_ids(i), this%FMS_diag_output_buffers)
      call fileptr%add_start_time(init_time)
      call fileptr%set_file_time_ops (fieldptr%diag_field(i), fieldptr%is_static())
+     call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: file "//trim(string(i))//" done")
     enddo
   elseif (present(axes)) then !only axes present
+    call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: adding axes-only to files")
     do i = 1, size(file_ids)
      fileptr => this%FMS_diag_files(file_ids(i))%FMS_diag_file
      call fileptr%add_field_and_yaml_id(fieldptr%get_id(), diag_field_indices(i))
      call fileptr%add_buffer_id(fieldptr%buffer_ids(i))
+     call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: file "//trim(string(i))// &
+                    " init_diurnal_axis")
      call fileptr%init_diurnal_axis(this%diag_axis, this%registered_axis, diag_field_indices(i))
      if(fieldptr%get_type_of_domain() .eq. NO_DOMAIN) then
        call fileptr%set_file_domain(null_diag_domain, fieldptr%get_type_of_domain())
      else
        call fileptr%set_file_domain(fieldptr%get_domain(), fieldptr%get_type_of_domain())
      endif
+     call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: file "//trim(string(i))//" add_axes")
      call fileptr%add_axes(axes, this%diag_axis, this%registered_axis, diag_field_indices(i), &
        fieldptr%buffer_ids(i), this%FMS_diag_output_buffers)
      call fileptr%set_file_time_ops (fieldptr%diag_field(i), fieldptr%is_static())
+     call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: file "//trim(string(i))//" done")
     enddo
-  elseif (present(init_time)) then !only inti time present
+  elseif (present(init_time)) then !only init time present
+    call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: adding init_time-only to files")
     do i = 1, size(file_ids)
      fileptr => this%FMS_diag_files(file_ids(i))%FMS_diag_file
      call fileptr%add_field_and_yaml_id(fieldptr%get_id(), diag_field_indices(i))
@@ -347,6 +364,7 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
      call fileptr%set_file_time_ops (fieldptr%diag_field(i), fieldptr%is_static())
     enddo
   else !no axis or init time present
+    call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: no axes or init_time")
     do i = 1, size(file_ids)
      fileptr => this%FMS_diag_files(file_ids(i))%FMS_diag_file
      call fileptr%add_field_and_yaml_id(fieldptr%get_id(), diag_field_indices(i))
@@ -357,6 +375,7 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
 
   !> Initialize buffer_ids of this field with the diag_field_indices(diag_field_indices)
 !! of the sorted variable list
+  call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: initialising buffers")
   do i = 1, size(fieldptr%buffer_ids)
     bufferptr => this%FMS_diag_output_buffers(fieldptr%buffer_ids(i))
     call bufferptr%set_field_id(this%registered_variables)
@@ -371,6 +390,7 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
     this%FMS_diag_files(file_ids(i))%get_next_next_output(), is_static=fieldptr%is_static())
   enddo
 
+  call mpp_error(NOTE, "DEBUG fms_register_diag_field_obj: done "//trim(modname)//"/"//trim(varname))
   nullify (fileptr)
   nullify (fieldptr)
   deallocate(diag_field_indices)
