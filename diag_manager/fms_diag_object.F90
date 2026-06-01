@@ -132,8 +132,11 @@ subroutine fms_diag_object_init (this,diag_subset_output, time_init)
 #ifdef use_yaml
  if (this%initialized) return
 
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: entering")
 ! allocate(diag_objs(get_num_unique_fields()))
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: calling diag_yaml_object_init")
   CALL diag_yaml_object_init(diag_subset_output)
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: returned from diag_yaml_object_init")
 
   !! Doing this here, because the base_time is not set until the yaml is parsed
   !! if time_init is present, it will be set in diag_manager_init
@@ -141,10 +144,15 @@ subroutine fms_diag_object_init (this,diag_subset_output, time_init)
     diag_init_time = get_base_time()
   endif
 
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: calling fms_diag_axis_object_init")
   this%axes_initialized = fms_diag_axis_object_init(this%diag_axis)
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: calling fms_diag_files_object_init")
   this%files_initialized = fms_diag_files_object_init(this%FMS_diag_files)
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: calling fms_diag_fields_object_init")
   this%fields_initialized = fms_diag_fields_object_init(this%FMS_diag_fields)
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: calling fms_diag_output_buffer_init")
   this%buffers_initialized =fms_diag_output_buffer_init(this%FMS_diag_output_buffers,SIZE(diag_yaml%get_diag_fields()))
+  call mpp_error(NOTE, "DEBUG fms_diag_object_init: all sub-inits complete")
   this%registered_variables = 0
   this%registered_axis = 0
   this%data_was_send = .false.

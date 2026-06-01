@@ -22,6 +22,12 @@
 #include <string.h>
 #include <math.h>
 
+// TODO: FMS_MAX_FILE_LEN is repeated from fms_platform.h.
+#ifndef FMS_MAX_FILE_LEN
+#define FMS_MAX_FILE_LEN 255
+#endif
+#define FMS_FILE_LEN FMS_MAX_FILE_LEN
+
 // struct to store a string and id associated with that string
 typedef struct{
   char arr_name[255];
@@ -47,20 +53,28 @@ void fms_sort_this(char **arr, int* n, int* id)
   int i; // For do loops
   my_type *the_type;
 
+  fprintf(stderr, "DEBUG fms_sort_this: n=%d\n", *n); fflush(stderr);
   // Save the array and the id into a struct
   the_type = (my_type*)calloc(*n, sizeof(my_type));
+  fprintf(stderr, "DEBUG fms_sort_this: calloc done\n"); fflush(stderr);
     for(i=0; i<*n; i++){
+      size_t slen = strnlen(arr[i], FMS_FILE_LEN);
+      fprintf(stderr, "DEBUG fms_sort_this: copy in i=%d len=%zu%s str=%.80s\n",
+              i, slen, slen >= FMS_FILE_LEN ? " [NO NULL!]" : "", arr[i]); fflush(stderr);
       the_type[i].id = id[i];
       strcpy(the_type[i].arr_name, arr[i]);
     }
+  fprintf(stderr, "DEBUG fms_sort_this: copy-in loop done, calling qsort\n"); fflush(stderr);
 
   qsort(the_type, *n, sizeof(my_type), arr_name_sorter);
 
+  fprintf(stderr, "DEBUG fms_sort_this: qsort done, copying out\n"); fflush(stderr);
   // Copy the sorted array and the sorted ids
   for(i=0; i<*n; i++){
     id[i] = the_type[i].id;
     strcpy(arr[i], the_type[i].arr_name);
   }
+  fprintf(stderr, "DEBUG fms_sort_this: done\n"); fflush(stderr);
 }
 
 // Implements a binary search to search for a string in an array of strings

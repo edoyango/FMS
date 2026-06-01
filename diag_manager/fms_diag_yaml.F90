@@ -400,6 +400,7 @@ subroutine diag_yaml_object_init(diag_subset_output)
 
   if (diag_yaml_module_initialized) return
 
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: entering")
   ! If doing and ensemble or nest run add the filename appendix (ens_XX or nest_XX) to the filename
   call get_instance_filename("diag_table.yaml", yamlfilename)
   if (index(trim(yamlfilename), "ens_") .ne. 0) then
@@ -409,13 +410,18 @@ subroutine diag_yaml_object_init(diag_subset_output)
     !! where every ensemble is using the same yaml
     if (.not. file_exists(yamlfilename)) yamlfilename = "diag_table.yaml"
   endif
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: calling open_and_parse_file for "//trim(yamlfilename))
   diag_yaml_id = open_and_parse_file(trim(yamlfilename))
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: open_and_parse_file returned")
   if (diag_yaml_id .eq. missing_file_error_code) &
     call mpp_error(FATAL, "The "//trim(yamlfilename)//" is not present and it is required!")
 
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: reading title and base_date")
   call diag_get_value_from_key(diag_yaml_id, 0, "title", diag_yaml%diag_title)
   call get_value_from_key(diag_yaml_id, 0, "base_date", diag_yaml%diag_basedate)
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: calling set_base_time")
   call set_base_time(diag_yaml%diag_basedate)
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: set_base_time returned")
 
   nfiles = get_num_blocks(diag_yaml_id, "diag_files")
   allocate(diag_file_ids(nfiles))
@@ -489,26 +495,34 @@ subroutine diag_yaml_object_init(diag_subset_output)
   allocate(diag_yaml%diag_files(actual_num_files))
   allocate(diag_yaml%diag_fields(total_nvars))
   allocate(variable_list%var_name(total_nvars))
+  variable_list%var_name = c_null_char
   allocate(variable_list%diag_field_indices(total_nvars))
   allocate(file_list%file_name(actual_num_files))
+  file_list%file_name = c_null_char
   allocate(file_list%diag_file_indices(actual_num_files))
 
   var_count = 0
   file_count = 0
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: starting nfiles_loop over "//trim(string(nfiles))//" files")
   !> Loop through the number of nfiles and fill in the diag_yaml obj
   nfiles_loop: do i = 1, nfiles
     if(ignore(i)) cycle
     file_count = file_count + 1
+    call mpp_error(NOTE, "DEBUG nfiles_loop: file "//trim(string(i))//" diag_yaml_files_obj_init")
     call diag_yaml_files_obj_init(diag_yaml%diag_files(file_count))
+    call mpp_error(NOTE, "DEBUG nfiles_loop: file "//trim(string(i))//" fill_in_diag_files")
     call fill_in_diag_files(diag_yaml_id, diag_file_ids(i), diag_yaml%diag_files(file_count))
 
     !> Save the file name in the file_list
     file_list%file_name(file_count) = trim(diag_yaml%diag_files(file_count)%file_fname)//c_null_char
     file_list%diag_file_indices(file_count) = file_count
+    call mpp_error(NOTE, "DEBUG nfiles_loop: file "//trim(string(i))//" fname="// &
+                   trim(diag_yaml%diag_files(file_count)%file_fname))
 
     allocate(var_ids(nvars_per_file(i)))
     allocate(mod_name(nvars_per_file(i)))
     if (has_module_block(i)) then
+      call mpp_error(NOTE, "DEBUG nfiles_loop: file "//trim(string(i))//" has module block")
       nmods = get_num_blocks(diag_yaml_id, "modules", parent_block_id=diag_file_ids(i))
       allocate(mod_ids(nmods))
       call get_block_ids(diag_yaml_id, "modules", mod_ids, parent_block_id=diag_file_ids(i))
@@ -530,10 +544,12 @@ subroutine diag_yaml_object_init(diag_subset_output)
 
       deallocate(mod_ids)
     else
+      call mpp_error(NOTE, "DEBUG nfiles_loop: file "//trim(string(i))//" no module block, getting varlist")
       call get_block_ids(diag_yaml_id, "varlist", var_ids, parent_block_id=diag_file_ids(i))
       nvars_per_file(i) = get_total_num_vars(diag_yaml_id, diag_file_ids(i))
     endif
 
+    call mpp_error(NOTE, "DEBUG nfiles_loop: file "//trim(string(i))//" nvars="//trim(string(nvars_per_file(i))))
     file_var_count = 0
     allocate(diag_yaml%diag_files(file_count)%file_varlist(nvars_per_file(i)))
     allocate(diag_yaml%diag_files(file_count)%file_outlist(nvars_per_file(i)))
@@ -555,8 +571,12 @@ subroutine diag_yaml_object_init(diag_subset_output)
       diag_yaml%diag_fields(var_count)%var_axes_names = ""
       diag_yaml%diag_fields(var_count)%var_file_is_subregional = diag_yaml%diag_files(file_count)%has_file_sub_region()
 
+      call mpp_error(NOTE, "DEBUG nvars_loop: file "//trim(string(i))//" var "//trim(string(j))// &
+                     " fill_in_diag_fields")
       call fill_in_diag_fields(diag_yaml_id, diag_yaml%diag_files(file_count), var_ids(j), &
         diag_yaml%diag_fields(var_count), allow_averages, has_module_block(i), mod_name(j))
+      call mpp_error(NOTE, "DEBUG nvars_loop: file "//trim(string(i))//" var "//trim(string(j))// &
+                     " varname="//trim(diag_yaml%diag_fields(var_count)%var_varname))
 
       !> Save the variable name in the diag_file type
       diag_yaml%diag_files(file_count)%file_varlist(file_var_count) = diag_yaml%diag_fields(var_count)%var_varname
@@ -573,19 +593,33 @@ subroutine diag_yaml_object_init(diag_subset_output)
       variable_list%var_name(var_count) = lowercase(variable_list%var_name(var_count))
       variable_list%diag_field_indices(var_count) = var_count
     enddo nvars_loop
+    call mpp_error(NOTE, "DEBUG nfiles_loop: file "//trim(string(i))//" done")
     deallocate(var_ids)
     deallocate(mod_name)
   enddo nfiles_loop
 
+  call mpp_error(NOTE, "DEBUG nfiles_loop: all files done, sorting")
   !> Sort the file list in alphabetical order
   file_list%file_pointer = fms_array_to_pointer(file_list%file_name)
+  call mpp_error(NOTE, "DEBUG sorting: calling fms_sort_this for file_list")
   call fms_sort_this(file_list%file_pointer, actual_num_files, file_list%diag_file_indices)
+  call mpp_error(NOTE, "DEBUG sorting: fms_sort_this for file_list done")
 
+  call mpp_error(NOTE, "DEBUG sorting: total_nvars="//trim(string(total_nvars))// &
+                 " var_count="//trim(string(var_count)))
+  do i = 1, total_nvars
+    call mpp_error(NOTE, "DEBUG variable_list("//trim(string(i))//"): "// &
+                   trim(diag_yaml%diag_fields(i)%var_varname)//":"// &
+                   trim(diag_yaml%diag_fields(i)%var_module))
+  enddo
   variable_list%var_pointer = fms_array_to_pointer(variable_list%var_name)
+  call mpp_error(NOTE, "DEBUG sorting: calling fms_sort_this for variable_list")
   call fms_sort_this(variable_list%var_pointer, total_nvars, variable_list%diag_field_indices)
+  call mpp_error(NOTE, "DEBUG sorting: fms_sort_this for variable_list done")
 
   deallocate(diag_file_ids)
   diag_yaml_module_initialized = .true.
+  call mpp_error(NOTE, "DEBUG diag_yaml_object_init: complete")
 end subroutine
 
 !> @brief Destroys the diag_yaml object
