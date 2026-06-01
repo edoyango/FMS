@@ -140,7 +140,7 @@ contains
     allocate(my_pointer(size(my_array)))
 
     do i = 1, size(my_array)
-      my_pointer(i) = c_loc(my_array(i))
+      my_pointer(i) = c_loc(my_array(i)(1:1))
     enddo
   end function fms_array_to_pointer
 
