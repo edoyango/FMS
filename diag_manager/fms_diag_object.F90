@@ -546,16 +546,20 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
 #else
   CHARACTER(len=:),   ALLOCATABLE :: edges_name !< Name of the edges
 
+  call mpp_error(NOTE, "DEBUG fms_diag_axis_init: entering axis_name="//trim(axis_name)// &
+                 " cart="//cart_name)
   this%registered_axis = this%registered_axis + 1
 
   if (this%registered_axis > max_axes) call mpp_error(FATAL, &
     &"diag_axis_init: max_axes exceeded, increase via diag_manager_nml")
 
+  call mpp_error(NOTE, "DEBUG fms_diag_axis_init: allocating axis object")
   allocate(fmsDiagFullAxis_type :: this%diag_axis(this%registered_axis)%axis)
 
   select type (axis => this%diag_axis(this%registered_axis)%axis )
   type is (fmsDiagFullAxis_type)
     if(present(edges)) then
+      call mpp_error(NOTE, "DEBUG fms_diag_axis_init: setting edges")
       if (edges < 0 .or. edges > this%registered_axis) &
         call mpp_error(FATAL, "diag_axit_init: The edge axis has not been defined. &
                               &Call diag_axis_init for the edge axis first")
@@ -564,14 +568,19 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
         edges_name = edges_axis%get_axis_name()
         call axis%set_edges(edges_name, edges)
       end select
+      call mpp_error(NOTE, "DEBUG fms_diag_axis_init: edges set")
     endif
+    call mpp_error(NOTE, "DEBUG fms_diag_axis_init: calling axis%register")
     call axis%register(axis_name, axis_data, units, cart_name, long_name=long_name, &
       & direction=direction, set_name=set_name, Domain=Domain, Domain2=Domain2, DomainU=DomainU, aux=aux, &
       & req=req, tile_count=tile_count, domain_position=domain_position, axis_length=axis_length)
+    call mpp_error(NOTE, "DEBUG fms_diag_axis_init: axis%register done")
 
     id = this%registered_axis
+    call mpp_error(NOTE, "DEBUG fms_diag_axis_init: calling axis%set_axis_id id="//trim(string(id)))
     call axis%set_axis_id(id)
   end select
+  call mpp_error(NOTE, "DEBUG fms_diag_axis_init: done axis_name="//trim(axis_name)//" id="//trim(string(id)))
 #endif
 end function fms_diag_axis_init
 

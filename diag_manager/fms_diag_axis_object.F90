@@ -38,7 +38,7 @@ module fms_diag_axis_object_mod
                               DIAG_NULL, index_gridtype, latlon_gridtype, pack_size_str, &
                               get_base_year, get_base_month, get_base_day, get_base_hour, get_base_minute,&
                               get_base_second, is_x_axis, is_y_axis
-  use mpp_mod,         only:  FATAL, mpp_error, uppercase, mpp_pe, mpp_root_pe, stdout
+  use mpp_mod,         only:  FATAL, NOTE, mpp_error, uppercase, mpp_pe, mpp_root_pe, stdout
   use fms2_io_mod,     only:  FmsNetcdfFile_t, FmsNetcdfDomainFile_t, FmsNetcdfUnstructuredDomainFile_t, &
                             & register_axis, register_field, register_variable_attribute, write_data
   use fms_diag_yaml_mod, only: subRegion_type, diag_yaml, MAX_SUBAXES
@@ -220,7 +220,9 @@ module fms_diag_axis_object_mod
     INTEGER,            INTENT(in), OPTIONAL :: tile_count      !< Number of tiles
     INTEGER,            INTENT(in), OPTIONAL :: domain_position !< Domain position, "NORTH" or "EAST"
     integer,            intent(in), optional :: axis_length     !< The length of the axis size(axis_data(:))
+    integer :: i
 
+    call mpp_error(NOTE, "DEBUG register_diag_axis_obj: setting name/units/cart for "//trim(axis_name))
     this%axis_name = trim(axis_name)
     this%units = trim(units)
     this%cart_name = uppercase(cart_name)
@@ -228,45 +230,64 @@ module fms_diag_axis_object_mod
 
     if (present(long_name)) this%long_name = trim(long_name)
 
+    call mpp_error(NOTE, "DEBUG register_diag_axis_obj: allocating axis_data")
     select type (axis_data)
     type is (real(kind=r8_kind))
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: axis_data is r8, allocating")
       allocate(real(kind=r8_kind) :: this%axis_data(axis_length))
-      this%axis_data = axis_data
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r8 allocate done, copying")
+      do i=1,size(axis_data)
+        this%axis_data(i) = axis_data(i)
+      end do
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r8 copy done")
       this%length = axis_length
       this%type_of_data = "double" !< This is what fms2_io expects in the register_field call
     type is (real(kind=r4_kind))
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: axis_data is r4, allocating")
       allocate(real(kind=r4_kind) :: this%axis_data(axis_length))
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r4 allocate done, copying")
       this%axis_data = axis_data
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: r4 copy done")
       this%length = axis_length
       this%type_of_data = "float" !< This is what fms2_io expects in the register_field call
     class default
       call mpp_error(FATAL, "The axis_data in your diag_axis_init call is not a supported type. &
                           &  Currently only r4 and r8 data is supported.")
     end select
+    call mpp_error(NOTE, "DEBUG register_diag_axis_obj: axis_data allocated")
 
     this%type_of_domain = NO_DOMAIN
     if (present(Domain)) then
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: setting Domain1d")
       if (present(Domain2) .or. present(DomainU)) call mpp_error(FATAL, &
         "The presence of Domain with any other domain type is prohibited. "//&
         "Check you diag_axis_init call for axis_name:"//trim(axis_name))
       allocate(diagDomain1d_t :: this%axis_domain)
       call this%axis_domain%set(Domain=Domain)
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: Domain1d set")
     else if (present(Domain2)) then
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: setting Domain2d")
         if (present(DomainU)) call mpp_error(FATAL, &
         "The presence of Domain2 with any other domain type is prohibited. "//&
         "Check you diag_axis_init call for axis_name:"//trim(axis_name))
       allocate(diagDomain2d_t :: this%axis_domain)
       call this%axis_domain%set(Domain2=Domain2)
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: Domain2d set")
       this%type_of_domain = TWO_D_DOMAIN
     else if (present(DomainU)) then
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: setting DomainUG")
       allocate(diagDomainUg_t :: this%axis_domain)
       call this%axis_domain%set(DomainU=DomainU)
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: DomainUG set")
       this%type_of_domain = UG_DOMAIN
+    else
+      call mpp_error(NOTE, "DEBUG register_diag_axis_obj: no domain")
     endif
 
     this%tile_count = 1
     if (present(tile_count)) this%tile_count = tile_count
 
+    call mpp_error(NOTE, "DEBUG register_diag_axis_obj: checking domain_position/direction")
     this%domain_position = CENTER
     if (present(domain_position)) this%domain_position = domain_position
     call check_if_valid_domain_position(this%domain_position)
@@ -280,6 +301,7 @@ module fms_diag_axis_object_mod
     this%set_name = ""
     if (present(set_name)) this%set_name = trim(set_name)
 
+    call mpp_error(NOTE, "DEBUG register_diag_axis_obj: allocating subaxis")
     if (MAX_SUBAXES .gt. 0) then
       allocate(this%subaxis(MAX_SUBAXES))
       this%subaxis = diag_null
@@ -287,6 +309,7 @@ module fms_diag_axis_object_mod
 
     this%nsubaxis = 0
     this%num_attributes = 0
+    call mpp_error(NOTE, "DEBUG register_diag_axis_obj: done for "//trim(axis_name))
   end subroutine register_diag_axis_obj
 
   !> @brief Add an attribute to an axis
