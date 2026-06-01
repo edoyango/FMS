@@ -73,14 +73,14 @@ integer            :: MAX_SUBAXES = 0 !< Max number of subaxis, set in diag_yaml
 
 !> @brief type to hold an array of sorted diag_fiels
 type varList_type
-  character(len=255), allocatable :: var_name(:) !< Array of diag_field
+  character(len=255), pointer, contiguous :: var_name(:) => null() !< Array of diag_field
   type(c_ptr), allocatable :: var_pointer(:) !< Array of pointers
   integer, allocatable :: diag_field_indices(:) !< Index of the field in the diag_field array
 end type
 
 !> @brief type to hold an array of sorted diag_files
 type fileList_type
-  character(len=FMS_FILE_LEN), allocatable :: file_name(:) !< Array of diag_field
+  character(len=FMS_FILE_LEN), pointer, contiguous :: file_name(:) => null() !< Array of diag_field
   type(c_ptr), allocatable :: file_pointer(:) !< Array of pointers
   integer, allocatable :: diag_file_indices(:)  !< Index of the file in the diag_file array
 end type
@@ -641,11 +641,11 @@ subroutine diag_yaml_object_end()
   if(allocated(diag_yaml%diag_fields)) deallocate(diag_yaml%diag_fields)
 
   if(allocated(file_list%file_pointer)) deallocate(file_list%file_pointer)
-  if(allocated(file_list%file_name)) deallocate(file_list%file_name)
+  if(associated(file_list%file_name)) deallocate(file_list%file_name)
   if(allocated(file_list%diag_file_indices)) deallocate(file_list%diag_file_indices)
 
   if(allocated(variable_list%var_pointer)) deallocate(variable_list%var_pointer)
-  if(allocated(variable_list%var_name)) deallocate(variable_list%var_name)
+  if(associated(variable_list%var_name)) deallocate(variable_list%var_name)
   if(allocated(variable_list%diag_field_indices)) deallocate(variable_list%diag_field_indices)
 
 end subroutine diag_yaml_object_end
