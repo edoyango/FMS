@@ -30,9 +30,38 @@
 
 // struct to store a string and id associated with that string
 typedef struct{
-  char arr_name[255];
+  char arr_name[FMS_FILE_LEN + 1];
   int id;
 }my_type;
+
+static void copy_name_in(char dest[FMS_FILE_LEN + 1], const char *src)
+{
+  size_t len;
+
+  if (src == NULL) {
+    dest[0] = '\0';
+    return;
+  }
+
+  len = strnlen(src, FMS_FILE_LEN);
+  if (len >= FMS_FILE_LEN) len = FMS_FILE_LEN - 1;
+
+  memcpy(dest, src, len);
+  dest[len] = '\0';
+}
+
+static void copy_name_out(char *dest, const char *src)
+{
+  size_t len;
+
+  if (dest == NULL) return;
+
+  len = strnlen(src, FMS_FILE_LEN);
+  if (len >= FMS_FILE_LEN) len = FMS_FILE_LEN - 1;
+
+  memcpy(dest, src, len);
+  dest[len] = '\0';
+}
 
 // Compares two my_type types by the arr_name
 static int arr_name_sorter(const void* p1, const void* p2)
@@ -52,17 +81,30 @@ void fms_sort_this(char **arr, int* n, int* id)
 {
   int i; // For do loops
   my_type *the_type;
+  size_t slen;
 
   fprintf(stderr, "DEBUG fms_sort_this: n=%d\n", *n); fflush(stderr);
   // Save the array and the id into a struct
   the_type = (my_type*)calloc(*n, sizeof(my_type));
+  if (the_type == NULL) {
+    fprintf(stderr, "fms_sort_this: unable to allocate sort buffer for n=%d\n", *n); fflush(stderr);
+    abort();
+  }
   fprintf(stderr, "DEBUG fms_sort_this: calloc done\n"); fflush(stderr);
     for(i=0; i<*n; i++){
-      size_t slen = strnlen(arr[i], FMS_FILE_LEN);
+      fprintf(stderr, "DEBUG fms_sort_this: copy in i=%d ptr=%p id=%d\n",
+              i, (void *)arr[i], id[i]); fflush(stderr);
+      if (arr[i] == NULL) {
+        fprintf(stderr, "DEBUG fms_sort_this: NULL string pointer at i=%d\n", i); fflush(stderr);
+        the_type[i].id = id[i];
+        the_type[i].arr_name[0] = '\0';
+        continue;
+      }
+      slen = strnlen(arr[i], FMS_FILE_LEN);
       fprintf(stderr, "DEBUG fms_sort_this: copy in i=%d len=%zu%s str=%.80s\n",
               i, slen, slen >= FMS_FILE_LEN ? " [NO NULL!]" : "", arr[i]); fflush(stderr);
       the_type[i].id = id[i];
-      strcpy(the_type[i].arr_name, arr[i]);
+      copy_name_in(the_type[i].arr_name, arr[i]);
     }
   fprintf(stderr, "DEBUG fms_sort_this: copy-in loop done, calling qsort\n"); fflush(stderr);
 
@@ -72,8 +114,9 @@ void fms_sort_this(char **arr, int* n, int* id)
   // Copy the sorted array and the sorted ids
   for(i=0; i<*n; i++){
     id[i] = the_type[i].id;
-    strcpy(arr[i], the_type[i].arr_name);
+    copy_name_out(arr[i], the_type[i].arr_name);
   }
+  free(the_type);
   fprintf(stderr, "DEBUG fms_sort_this: done\n"); fflush(stderr);
 }
 
