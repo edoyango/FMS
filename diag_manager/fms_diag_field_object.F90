@@ -283,12 +283,14 @@ subroutine fms_register_diag_field_obj &
  character(len=:), allocatable, target :: a_name_tmp !< axis name tmp
  type(diagYamlFilesVar_type), pointer :: yaml_var_ptr !< pointer this fields yaml variable entries
 
+  call mpp_error(NOTE, "DEBUG fieldptr%register: entering "//trim(modname)//"/"//trim(varname))
 !> Fill in information from the register call
   this%varname = trim(varname)
   this%modname = trim(modname)
 
 !> Add the yaml info to the diag_object
   this%diag_field = get_diag_fields_entries(diag_field_indices)
+  call mpp_error(NOTE, "DEBUG fieldptr%register: diag_field set")
 
   if (present(static)) then
     this%static = static
@@ -301,7 +303,10 @@ subroutine fms_register_diag_field_obj &
 
     this%scalar = .false.
     this%axis_ids = axes
+    call mpp_error(NOTE, "DEBUG fieldptr%register: calling get_domain_and_domain_type")
     call get_domain_and_domain_type(diag_axis, this%axis_ids, this%type_of_domain, this%domain, this%varname)
+    call mpp_error(NOTE, "DEBUG fieldptr%register: get_domain_and_domain_type done, type_of_domain="// &
+                   trim(int2str(this%type_of_domain)))
 
     ! store dim names for output
     ! cant use this%diag_field since they are copies
@@ -309,7 +314,10 @@ subroutine fms_register_diag_field_obj &
       yaml_var_ptr => diag_yaml%get_diag_field_from_id(diag_field_indices(i))
       ! add dim names from axes
       do j=1, SIZE(axes)
+        call mpp_error(NOTE, "DEBUG fieldptr%register: i="//trim(int2str(i))//" j="//trim(int2str(j))// &
+                       " calling get_axis_name for axis "//trim(int2str(axes(j))))
         a_name_tmp = diag_axis(axes(j))%axis%get_axis_name( yaml_var_ptr%is_file_subregional())
+        call mpp_error(NOTE, "DEBUG fieldptr%register: get_axis_name="//trim(a_name_tmp))
         if(yaml_var_ptr%has_var_zbounds() .and. a_name_tmp .eq. 'z') &
           a_name_tmp = trim(a_name_tmp)//"_sub01"
         call yaml_var_ptr%add_axis_name(a_name_tmp)
@@ -325,6 +333,7 @@ subroutine fms_register_diag_field_obj &
         call yaml_var_ptr%add_axis_name(a_name_tmp)
       endif
     enddo
+    call mpp_error(NOTE, "DEBUG fieldptr%register: axis dim-name loop done")
   else
     !> The variable is a scalar
     this%scalar = .true.
@@ -338,9 +347,11 @@ subroutine fms_register_diag_field_obj &
         call yaml_var_ptr%add_axis_name(a_name_tmp)
       enddo
     endif
+    call mpp_error(NOTE, "DEBUG fieldptr%register: scalar path done")
   endif
   nullify(yaml_var_ptr)
 
+  call mpp_error(NOTE, "DEBUG fieldptr%register: setting optional args")
 !> get the optional arguments if included and the diagnostic is in the diag table
   if (present(longname))      this%longname      = trim(longname)
   if (present(standname))     this%standname     = trim(standname)
@@ -455,11 +466,13 @@ subroutine fms_register_diag_field_obj &
     this%multiple_send_data = .false.
   endif
 
+  call mpp_error(NOTE, "DEBUG fieldptr%register: allocating attributes")
  !< Allocate space for any additional variable attributes
  !< These will be fill out when calling `diag_field_add_attribute`
  allocate(this%attributes(max_field_attributes))
  this%num_attributes = 0
  this%registered = .true.
+ call mpp_error(NOTE, "DEBUG fieldptr%register: done "//trim(modname)//"/"//trim(varname))
 end subroutine fms_register_diag_field_obj
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 

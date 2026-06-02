@@ -515,6 +515,7 @@ end function register_diag_field_array
     END IF
 
     if (use_modern_diag) then
+      call mpp_error(NOTE, "DEBUG register_static_field: entering "//trim(module_name)//"/"//trim(field_name))
       if( do_diag_field_log) then
          if ( PRESENT(do_not_log) ) THEN
              if(.not. do_not_log) call log_diag_field_info(module_name, field_name, axes, long_name,&
@@ -524,6 +525,7 @@ end function register_diag_field_array
                            & missing_value, range, dynamic=.false.)
          endif
      endif
+      call mpp_error(NOTE, "DEBUG register_static_field: calling fms_register_static_field")
       register_static_field = fms_diag_object%fms_register_static_field(module_name, field_name, axes, &
        & long_name=long_name, units=units, missing_value=missing_value, range=range, mask_variant=mask_variant, &
        & standard_name=standard_name, dynamic=DYNAMIC, do_not_log=do_not_log, interp_method=interp_method,&
