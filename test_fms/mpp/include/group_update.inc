@@ -59,6 +59,7 @@
     type(domain2D) :: domain
     integer        :: num_contact, ntiles, npes_per_tile
     integer        :: i, j, k, l, n, shift
+    integer        :: i1, i2, i3
     integer        :: isc, iec, jsc, jec, isd, ied, jsd, jed
     integer        :: ism, iem, jsm, jem
     integer        :: indx(3), ix, iy
@@ -253,6 +254,8 @@
     x1 = zero
     y1 = zero
 
+    !$omp target enter data if(use_omp_offload) map(to: a1, x1, y1)
+
     call arr_init(base)
 
     !--- Test for partial direction update
@@ -260,18 +263,43 @@
        call mpp_create_group_update(group_update, a1(:,:,:,l), domain, flags=WUPDATE+SUPDATE, xdim=ix, ydim=iy)
     end do
 
+    !$omp target teams loop if(use_omp_offload) default(shared) &
+    !$omp   shared(num_fields, compute, compute_halo, a1, base) map(tofrom: a1) map(to: base)
     do l = 1, num_fields
-       a1(INDICES_COMPUTE_HALO_,l) = 999
-       a1(INDICES_COMPUTE_,l) = base(INDICES_COMPUTE_) + l*1e3
+       do i3 = compute_halo%lb(3), compute_halo%ub(3)
+          do i2 = compute_halo%lb(2), compute_halo%ub(2)
+             do i1 = compute_halo%lb(1), compute_halo%ub(1)
+                a1(i1,i2,i3,l) = 999
+             enddo
+          enddo
+       enddo
+       do i3 = compute%lb(3), compute%ub(3)
+          do i2 = compute%lb(2), compute%ub(2)
+             do i1 = compute%lb(1), compute%ub(1)
+                a1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3
+             enddo
+          enddo
+       enddo
     enddo
 
-    a2 = a1
+    !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+    !$omp   shared(num_fields, mem, a1, a2) map(to: a1) map(from: a2)
+    do l = 1, num_fields
+       do i3 = mem%lb(3), mem%ub(3)
+          do i2 = mem%lb(2), mem%ub(2)
+             do i1 = mem%lb(1), mem%ub(1)
+                a2(i1,i2,i3,l) = a1(i1,i2,i3,l)
+             enddo
+          enddo
+       enddo
+    enddo
     call mpp_do_group_update(group_update, domain, zero, omp_offload=use_omp_offload)
 
     do l = 1, num_fields
        call mpp_update_domains( a2(:,:,:,l), domain, flags=WUPDATE+SUPDATE, complete=l==num_fields )
     enddo
 
+    !$omp target update if(use_omp_offload) from(a1)
     do l = 1, num_fields
        write(text, '(i3.3)') l
        call compare_checksums(a1(INDICES_DATA_,l),a2(INDICES_DATA_,l),type//' CENTER South West '//text)
@@ -327,13 +355,76 @@
        a1 = zero
        x1 = zero
        y1 = zero
+       !$omp target update if(use_omp_offload) to(a1, x1, y1)
 
+       !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute, a1, base) map(to: base) map(tofrom: a1)
        do l = 1, num_fields
-          a1(INDICES_COMPUTE_,l) = base(INDICES_COMPUTE_) + l*1e3
-          x1(INDICES_COMPUTE_ISHIFT_,l) = base(INDICES_COMPUTE_ISHIFT_) + l*1e3 + 1e6
-          y1(INDICES_COMPUTE_JSHIFT_,l) = base(INDICES_COMPUTE_JSHIFT_) + l*1e3 + 2*1e6
+          do i3 = compute%lb(3), compute%ub(3)
+             do i2 = compute%lb(2), compute%ub(2)
+                do i1 = compute%lb(1), compute%ub(1)
+                   a1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3
+                enddo
+             enddo
+          enddo
        enddo
-       a2 = a1; x2 = x1; y2 = y1
+       !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute_ishift, x1, base) map(to: base) map(tofrom: x1)
+       do l = 1, num_fields
+          do i3 = compute_ishift%lb(3), compute_ishift%ub(3)
+             do i2 = compute_ishift%lb(2), compute_ishift%ub(2)
+                do i1 = compute_ishift%lb(1), compute_ishift%ub(1)
+                   x1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 1e6
+                enddo
+             enddo
+          enddo
+       enddo
+       !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute_jshift, y1, base) map(to: base) map(tofrom: y1)
+       do l = 1, num_fields
+          do i3 = compute_jshift%lb(3), compute_jshift%ub(3)
+             do i2 = compute_jshift%lb(2), compute_jshift%ub(2)
+                do i1 = compute_jshift%lb(1), compute_jshift%ub(1)
+                   y1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 2*1e6
+                enddo
+             enddo
+          enddo
+       enddo
+
+       !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+       !$omp   shared(mem, a1, a2) map(to: a1) map(from: a2)
+       do l = 1, num_fields
+          do i3 = mem%lb(3), mem%ub(3)
+             do i2 = mem%lb(2), mem%ub(2)
+                do i1 = mem%lb(1), mem%ub(1)
+                   a2(i1,i2,i3,l) = a1(i1,i2,i3,l)
+                enddo
+             enddo
+          enddo
+       enddo
+       !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+       !$omp   shared(mem_ishift, x1, x2) map(to: x1) map(from: x2)
+       do l = 1, num_fields
+          do i3 = mem_ishift%lb(3), mem_ishift%ub(3)
+             do i2 = mem_ishift%lb(2), mem_ishift%ub(2)
+                do i1 = mem_ishift%lb(1), mem_ishift%ub(1)
+                   x2(i1,i2,i3,l) = x1(i1,i2,i3,l)
+                enddo
+             enddo
+          enddo
+       enddo
+       !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+       !$omp   shared(mem_jshift, y1, y2) map(to: y1) map(from: y2)
+       do l = 1, num_fields
+          do i3 = mem_jshift%lb(3), mem_jshift%ub(3)
+             do i2 = mem_jshift%lb(2), mem_jshift%ub(2)
+                do i1 = mem_jshift%lb(1), mem_jshift%ub(1)
+                   y2(i1,i2,i3,l) = y1(i1,i2,i3,l)
+                enddo
+             enddo
+          enddo
+       enddo
+
        call mpp_clock_begin(id1)
        call mpp_do_group_update(group_update, domain, zero, omp_offload=use_omp_offload)
        call mpp_clock_end  (id1)
@@ -349,6 +440,7 @@
 
        !--- compare checksum
        if( n == num_iter ) then
+          !$omp target update if(use_omp_offload) from(a1, x1, y1)
           do l = 1, num_fields
              write(text, '(i3.3)') l
              call compare_checksums(a1(INDICES_DATA_,l),a2(INDICES_DATA_,l),type//' CENTER '//text)
@@ -360,11 +452,40 @@
        a1 = zero
        x1 = zero
        y1 = zero
+       !$omp target update if(use_omp_offload) to(a1, x1, y1)
 
+       !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute, a1, base) map(to: base) map(tofrom: a1)
        do l = 1, num_fields
-          a1(INDICES_COMPUTE_,l) = base(INDICES_COMPUTE_) + l*1e3
-          x1(INDICES_COMPUTE_ISHIFT_,l) = base(INDICES_COMPUTE_ISHIFT_) + l*1e3 + 1e6
-          y1(INDICES_COMPUTE_JSHIFT_,l) = base(INDICES_COMPUTE_JSHIFT_) + l*1e3 + 2*1e6
+          do i3 = compute%lb(3), compute%ub(3)
+             do i2 = compute%lb(2), compute%ub(2)
+                do i1 = compute%lb(1), compute%ub(1)
+                   a1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3
+                enddo
+             enddo
+          enddo
+       enddo
+       !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute_ishift, x1, base) map(to: base) map(tofrom: x1)
+       do l = 1, num_fields
+          do i3 = compute_ishift%lb(3), compute_ishift%ub(3)
+             do i2 = compute_ishift%lb(2), compute_ishift%ub(2)
+                do i1 = compute_ishift%lb(1), compute_ishift%ub(1)
+                   x1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 1e6
+                enddo
+             enddo
+          enddo
+       enddo
+       !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute_jshift, y1, base) map(to: base) map(tofrom: y1)
+       do l = 1, num_fields
+          do i3 = compute_jshift%lb(3), compute_jshift%ub(3)
+             do i2 = compute_jshift%lb(2), compute_jshift%ub(2)
+                do i1 = compute_jshift%lb(1), compute_jshift%ub(1)
+                   y1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 2*1e6
+                enddo
+             enddo
+          enddo
        enddo
        call mpp_clock_begin(id3)
        call mpp_start_group_update(group_update, domain, zero)
@@ -372,6 +493,7 @@
        call mpp_clock_end  (id3)
        !--- compare checksum
        if( n == num_iter ) then
+       !$omp target update if(use_omp_offload) from(a1, x1, y1)
        do l = 1, num_fields
           write(text, '(i3.3)') l
           call compare_checksums(a1(INDICES_DATA_,l),a2(INDICES_DATA_,l), type//' nonblock CENTER '//text)
@@ -437,12 +559,31 @@
     a1 = zero
     x1 = zero
     y1 = zero
+    !$omp target update if(use_omp_offload) to(a1)
 
+    !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+    !$omp   shared(compute, a1, base) map(to: base) map(tofrom: a1)
     do l = 1, num_fields
-       a1(INDICES_COMPUTE_,l) = base(INDICES_COMPUTE_) + l*1e3
+       do i3 = compute%lb(3), compute%ub(3)
+          do i2 = compute%lb(2), compute%ub(2)
+             do i1 = compute%lb(1), compute%ub(1)
+                a1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3
+             enddo
+          enddo
+       enddo
     enddo
 
-    a2 = a1
+    !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+    !$omp   shared(mem, a1, a2) map(to: a1) map(from: a2)
+    do l = 1, num_fields
+       do i3 = mem%lb(3), mem%ub(3)
+          do i2 = mem%lb(2), mem%ub(2)
+             do i1 = mem%lb(1), mem%ub(1)
+                a2(i1,i2,i3,l) = a1(i1,i2,i3,l)
+             enddo
+          enddo
+       enddo
+    enddo
     x2 = x1
     y2 = y1
 
@@ -455,14 +596,24 @@
     call mpp_clock_end(id2)
 
     !--- compare checksum
+    !$omp target update if(use_omp_offload) from(a1)
     do l = 1, num_fields
        write(text, '(i3.3)') l
        call compare_checksums(a1(INDICES_DATA_,l),a2(INDICES_DATA_,l),type//' 4D CENTER '//text)
     enddo
 
     a1 = 0
+    !$omp target update if(use_omp_offload) to(a1)
+    !$omp target teams loop collapse(3) if(use_omp_offload) default(shared) &
+    !$omp   shared(compute, a1, base) map(to: base) map(tofrom: a1)
     do l = 1, num_fields
-       a1(INDICES_COMPUTE_,l) = base(INDICES_COMPUTE_) + l*1e3
+       do i3 = compute%lb(3), compute%ub(3)
+          do i2 = compute%lb(2), compute%ub(2)
+             do i1 = compute%lb(1), compute%ub(1)
+                a1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3
+             enddo
+          enddo
+       enddo
     enddo
     call mpp_clock_begin(id3)
     call mpp_start_group_update(group_update, domain, zero)
@@ -470,6 +621,7 @@
     call mpp_clock_end  (id3)
 
     !--- compare checksum
+    !$omp target update if(use_omp_offload) from(a1)
     do l = 1, num_fields
        write(text, '(i3.3)') l
        call compare_checksums(a1(INDICES_DATA_,l),a2(INDICES_DATA_,l), type//' nonblock 4D CENTER '//text)
@@ -478,6 +630,7 @@
 
 
     !--- test for BGRID.
+    !$omp target exit data if(use_omp_offload) map(release: a1, x1, y1)
     deallocate(a1, x1, y1)
     deallocate(a2, x2, y2)
     call mpp_clear_group_update(group_update)
@@ -489,6 +642,8 @@
     allocate(x2(INDICES_MEM_IJSHIFT_, num_fields))
     allocate(y2(INDICES_MEM_IJSHIFT_, num_fields))
 
+    !$omp target enter data if(use_omp_offload) map(alloc: a1, x1, y1)
+
     do l =1, num_fields
        call mpp_create_group_update(group_update, a1(:,:,:,l), domain, position=CORNER, xdim=ix, ydim=iy)
        call mpp_create_group_update(group_update, x1(:,:,:,l), y1(:,:,:,l), domain, gridtype=BGRID_NE, &
@@ -497,15 +652,35 @@
 
     do n = 1, num_iter
        a1 = 0; x1 = 0; y1 = 0
+       !$omp target update if(use_omp_offload) to(a1, x1, y1)
+
+       !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute_ijshift, a1, x1, y1, base) map(to: base) map(tofrom: a1, x1, y1)
        do l = 1, num_fields
-          a1(INDICES_COMPUTE_IJSHIFT_,l) = base(INDICES_COMPUTE_IJSHIFT_) + l*1e3
-          x1(INDICES_COMPUTE_IJSHIFT_,l) = base(INDICES_COMPUTE_IJSHIFT_) + l*1e3 + 1e6
-          y1(INDICES_COMPUTE_IJSHIFT_,l) = base(INDICES_COMPUTE_IJSHIFT_) + l*1e3 + 2*1e6
+          do i3 = compute_ijshift%lb(3), compute_ijshift%ub(3)
+             do i2 = compute_ijshift%lb(2), compute_ijshift%ub(2)
+                do i1 = compute_ijshift%lb(1), compute_ijshift%ub(1)
+                   a1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3
+                   x1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 1e6
+                   y1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 2*1e6
+                enddo
+             enddo
+          enddo
        enddo
 
-       a2 = a1
-       x2 = x1
-       y2 = y1
+       !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+       !$omp   shared(mem_ijshift, a1, x1, y1, a2, x2, y2) map(to: a1, x1, y1) map(from: a2, x2, y2)
+       do l = 1, num_fields
+          do i3 = mem_ijshift%lb(3), mem_ijshift%ub(3)
+             do i2 = mem_ijshift%lb(2), mem_ijshift%ub(2)
+                do i1 = mem_ijshift%lb(1), mem_ijshift%ub(1)
+                   a2(i1,i2,i3,l) = a1(i1,i2,i3,l)
+                   x2(i1,i2,i3,l) = x1(i1,i2,i3,l)
+                   y2(i1,i2,i3,l) = y1(i1,i2,i3,l)
+                enddo
+             enddo
+          enddo
+       enddo
 
        call mpp_clock_begin(id1)
        call mpp_do_group_update(group_update, domain, zero, omp_offload=use_omp_offload)
@@ -522,6 +697,7 @@
 
        !--- compare checksum
        if( n == num_iter ) then
+       !$omp target update if(use_omp_offload) from(a1, x1, y1)
        do l = 1, num_fields
           write(text, '(i3.3)') l
           call compare_checksums(a1(INDICES_DATA_IJSHIFT_,l),a2(INDICES_DATA_IJSHIFT_,l),type // ' CORNER ' // text)
@@ -533,11 +709,20 @@
        a1 = zero
        x1 = zero
        y1 = zero
+       !$omp target update if(use_omp_offload) to(a1, x1, y1)
 
+       !$omp target teams loop collapse(4) if(use_omp_offload) default(shared) &
+       !$omp   shared(compute_ijshift, a1, x1, y1, base) map(to: base) map(tofrom: a1, x1, y1)
        do l = 1, num_fields
-          a1(INDICES_COMPUTE_IJSHIFT_,l) = base(INDICES_COMPUTE_IJSHIFT_) + l*1e3
-          x1(INDICES_COMPUTE_IJSHIFT_,l) = base(INDICES_COMPUTE_IJSHIFT_) + l*1e3 + 1e6
-          y1(INDICES_COMPUTE_IJSHIFT_,l) = base(INDICES_COMPUTE_IJSHIFT_) + l*1e3 + 2*1e6
+          do i3 = compute_ijshift%lb(3), compute_ijshift%ub(3)
+             do i2 = compute_ijshift%lb(2), compute_ijshift%ub(2)
+                do i1 = compute_ijshift%lb(1), compute_ijshift%ub(1)
+                   a1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3
+                   x1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 1e6
+                   y1(i1,i2,i3,l) = base(i1,i2,i3) + l*1e3 + 2*1e6
+                enddo
+             enddo
+          enddo
        enddo
        call mpp_clock_begin(id3)
        call mpp_start_group_update(group_update, domain, zero)
@@ -545,6 +730,7 @@
        call mpp_clock_end  (id3)
        !--- compare checksum
        if( n == num_iter ) then
+       !$omp target update if(use_omp_offload) from(a1, x1, y1)
        do l = 1, num_fields
           write(text, '(i3.3)') l
           call compare_checksums(a1(INDICES_DATA_IJSHIFT_,l),a2(INDICES_DATA_IJSHIFT_,l), &
@@ -557,6 +743,7 @@
        endif
     enddo
 
+    !$omp target exit data if(use_omp_offload) map(release: a1, x1, y1)
     call mpp_clear_group_update(group_update)
 
     !-----------------------------------------------------------------------------

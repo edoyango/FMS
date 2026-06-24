@@ -228,11 +228,11 @@ program test_mpp_domains
   if( test_group .or. test_group_offload) then
      if (mpp_pe() == mpp_root_pe())  print *, '--------------------> Testing group_update <-------------------'
      do p=1,factorial(3)
-       call test_group_update_r4('Folded-north', p, omp_offload=test_group_offload)
-       call test_group_update_r4('Cubic-Grid', p, omp_offload=test_group_offload)
+       call test_group_update_r4('Folded-north', p, use_omp_offload=test_group_offload)
+       call test_group_update_r4('Cubic-Grid', p, use_omp_offload=test_group_offload)
 
-       call test_group_update_r8('Folded-north', p, omp_offload=test_group_offload)
-       call test_group_update_r8('Cubic-Grid', p, omp_offload=test_group_offload)
+       call test_group_update_r8('Folded-north', p, use_omp_offload=test_group_offload)
+       call test_group_update_r8('Cubic-Grid', p, use_omp_offload=test_group_offload)
      enddo
      if (mpp_pe() == mpp_root_pe())  print *, '--------------------> Finished testing group_update <-------------------'
   endif
