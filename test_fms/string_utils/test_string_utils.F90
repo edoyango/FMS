@@ -112,6 +112,7 @@ program test_fms_string_utils
 
   call check_string
   call check_stringify
+  call check_unterminated_slot_sort
 
   call fms_end()
 
@@ -127,20 +128,20 @@ program test_fms_string_utils
     integer :: j !< For do loops
     character(len=10) :: ans(10) !< Expected array of sorted strings
 
-    ans(1) = "alpha"//c_null_char
-    ans(2) = "beta"//c_null_char
-    ans(3) = "charlie"//c_null_char
-    ans(4) = "foxtrop"//c_null_char
-    ans(5) = "foxtrop"//c_null_char
-    ans(6) = "golf"//c_null_char
-    ans(7) = "golf"//c_null_char
-    ans(8) = "golf"//c_null_char
-    ans(9) = "india"//c_null_char
-    ans(10) = "juliet"//c_null_char
+    ans(1) = "alpha"
+    ans(2) = "beta"
+    ans(3) = "charlie"
+    ans(4) = "foxtrop"
+    ans(5) = "foxtrop"
+    ans(6) = "golf"
+    ans(7) = "golf"
+    ans(8) = "golf"
+    ans(9) = "india"
+    ans(10) = "juliet"
 
     do j = 1, size(ans)
       print *, "Comparing ", trim(sorted_array(j)), " and ", trim(ans(j))
-      if (trim(sorted_array(j)) .eq. trim(ans(j))) &
+      if (trim(sorted_array(j)) .ne. trim(ans(j))) &
         call mpp_error(FATAL, "The sorted array is not correct!")
     end do
 
@@ -167,6 +168,43 @@ program test_fms_string_utils
       endif
     end do
   end subroutine check_my_indices
+
+  subroutine check_unterminated_slot_sort
+    character(len=255), allocatable, target :: names(:)
+    type(c_ptr), allocatable :: name_pointers(:)
+    integer, allocatable :: ids(:)
+    integer :: j
+
+    allocate(names(3))
+    allocate(name_pointers(3))
+    allocate(ids(3))
+
+    ids = (/1, 2, 3/)
+    names(1) = repeat("z", 255)//c_null_char
+    names(2) = "alpha"//c_null_char
+    names(3) = "beta"//c_null_char
+
+    if (index(names(1), c_null_char) .ne. 0) &
+      call mpp_error(FATAL, "Unterminated slot sort test setup did not truncate the NUL terminator")
+
+    do j = 1, size(names)
+      name_pointers(j) = c_loc(names(j))
+    enddo
+    call fms_sort_this(name_pointers, 3, ids)
+
+    if (any(ids .ne. (/2, 3, 1/))) &
+      call mpp_error(FATAL, "Unterminated slot sort did not permute ids correctly")
+    if (index(names(1), c_null_char) .ne. 6) &
+      call mpp_error(FATAL, "Unterminated slot sort did not preserve alpha as a C string")
+    if (index(names(2), c_null_char) .ne. 5) &
+      call mpp_error(FATAL, "Unterminated slot sort did not preserve beta as a C string")
+    if (names(3) .ne. repeat("z", 255)) &
+      call mpp_error(FATAL, "Unterminated slot sort did not preserve an unterminated full-width string")
+
+    deallocate(names)
+    deallocate(name_pointers)
+    deallocate(ids)
+  end subroutine check_unterminated_slot_sort
 
   subroutine check_string
     if (string(.true.) .ne. "True") then
