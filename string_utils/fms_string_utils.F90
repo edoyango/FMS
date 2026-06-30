@@ -47,17 +47,18 @@ module fms_string_utils_mod
 !> @}
 
   interface
-  !> @brief Sorts an array of pointers (my pointer) of size (p_size) in
-  !! alphabetical order.
-  subroutine fms_sort_this(my_pointer, p_size, indices) bind(c)
+  !> @brief Sorts an array of fixed-length Fortran strings and matching indices
+  !! using the known length of each Fortran character element.
+  subroutine fms_sort_this_binding(my_pointer, p_size, string_len, indices) bind(c, name="fms_sort_this_len")
     use iso_c_binding
 
     type(c_ptr),         intent(inout) :: my_pointer(*) !< IN:  Array of c pointers to sort
                                                         !! OUT: Sorted array of c pointers
     integer(kind=c_int), intent(in)    :: p_size        !< Size of the array
+    integer(kind=c_int), intent(in)    :: string_len    !< Length of each string element
     integer(kind=c_int), intent(inout) :: indices(*)    !< IN:  Array of the indices of my_pointer
                                                         !! OUT: Sorted array of indices
-  end subroutine fms_sort_this
+  end subroutine fms_sort_this_binding
 
   !> @brief Private c function that finds a string in a SORTED array of c pointers
   !! @return Indices of my_pointer where the string was found as a string!!!
@@ -129,7 +130,7 @@ contains
   !! @return An array of c pointers
   function fms_array_to_pointer(my_array) &
   result(my_pointer)
-    character(len=*), target :: my_array(:) !!< Array of strings to convert
+    character(len=:), allocatable, target, intent(in) :: my_array(:) !!< Array of strings to convert
     type(c_ptr), allocatable :: my_pointer(:)
 
     integer :: i !< For do loops
@@ -142,6 +143,37 @@ contains
       my_pointer(i) = c_loc(my_array(i))
     enddo
   end function fms_array_to_pointer
+
+  !> @brief Sorts a Fortran fixed-length character array in place and applies the
+  !! same permutation to @p indices. The C binding receives len(my_array), so it
+  !! never has to infer the Fortran character element length from C pointers.
+  subroutine fms_sort_this(my_array, indices)
+    character(len=*), target, intent(inout) :: my_array(:) !< IN/OUT: Strings to sort
+    integer,                 intent(inout) :: indices(:)  !< IN/OUT: Indices to permute with strings
+
+    type(c_ptr), allocatable :: my_pointer(:) !< Pointers to Fortran character elements
+    integer(kind=c_int), allocatable :: c_indices(:) !< C binding work copy of indices
+    integer(kind=c_int) :: p_size             !< Number of strings
+    integer(kind=c_int) :: string_len         !< Length of each Fortran character element
+    integer :: i                              !< For do loops
+
+    if (size(my_array) .ne. size(indices)) call mpp_error(FATAL, &
+      "fms_sort_this: String and index arrays must have the same size")
+
+    if (size(my_array) <= 1) return
+
+    p_size = int(size(my_array), kind=c_int)
+    string_len = int(len(my_array), kind=c_int)
+    allocate(my_pointer(size(my_array)))
+    do i = 1, size(my_array)
+      my_pointer(i) = c_loc(my_array(i))
+    enddo
+    c_indices = int(indices, kind=c_int)
+    call fms_sort_this_binding(my_pointer, p_size, string_len, c_indices)
+    indices = int(c_indices, kind=kind(indices))
+    deallocate(c_indices)
+    deallocate(my_pointer)
+  end subroutine fms_sort_this
 
   !> @brief Convert an array of c pointers back to a character array
   !! @return A character array
@@ -167,7 +199,8 @@ contains
   !! If the string was not found, indices will be indices(1) = -999
   !> <br>Example usage:
   !!     my_pointer = fms_array_to_pointer(my_array)
-  !!     call fms_sort_this(my_pointer, n_array, indices)
+  !!     call fms_sort_this(my_array, indices)
+  !!     my_pointer = fms_array_to_pointer(my_array)
   !!     ifind = fms_find_my_string(my_pointer, n_array, string_to_find)
   function fms_find_my_string(my_pointer, narray, string_to_find) &
   result(ifind)

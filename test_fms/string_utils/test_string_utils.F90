@@ -55,13 +55,25 @@ program test_fms_string_utils
     my_ids(i) = i
   end do
 
-  my_pointer = fms_array_to_pointer(my_array)
-
   print *, "Check if fms_find_unique works without sorting the array first!"
+  my_pointer = fms_array_to_pointer(my_array)
   nunique = fms_find_unique(my_pointer, 10)
   if (nunique .ne. 7) call mpp_error(FATAL, "The number of unique strings in your array is not correct")
+  deallocate(my_pointer)
 
-  call fms_sort_this(my_pointer, 10, my_ids)
+  my_array(1) = "golf"//c_null_char
+  my_array(2) = "charlie"//c_null_char
+  my_array(3) = "golf"//c_null_char
+  my_array(4) = "beta"//c_null_char
+  my_array(5) = "alpha"//c_null_char
+  my_array(6) = "foxtrop"//c_null_char
+  my_array(7) = "golf"//c_null_char
+  my_array(8) = "foxtrop"//c_null_char
+  my_array(9) = "juliet"//c_null_char
+  my_array(10) ="india"//c_null_char
+
+  call fms_sort_this(my_array, my_ids)
+  my_pointer = fms_array_to_pointer(my_array)
   my_sorted_array = fms_pointer_to_array(my_pointer, 10)
   print *, "Checking if the array was sorted correctly"
   call check_my_sorted_array(my_sorted_array)
@@ -112,7 +124,7 @@ program test_fms_string_utils
 
   call check_string
   call check_stringify
-  call check_unterminated_slot_sort
+  call check_length_aware_sort
 
   call fms_end()
 
@@ -169,14 +181,11 @@ program test_fms_string_utils
     end do
   end subroutine check_my_indices
 
-  subroutine check_unterminated_slot_sort
-    character(len=255), allocatable, target :: names(:)
-    type(c_ptr), allocatable :: name_pointers(:)
+  subroutine check_length_aware_sort
+    character(len=255), allocatable :: names(:)
     integer, allocatable :: ids(:)
-    integer :: j
 
     allocate(names(3))
-    allocate(name_pointers(3))
     allocate(ids(3))
 
     ids = (/1, 2, 3/)
@@ -185,26 +194,22 @@ program test_fms_string_utils
     names(3) = "beta"//c_null_char
 
     if (index(names(1), c_null_char) .ne. 0) &
-      call mpp_error(FATAL, "Unterminated slot sort test setup did not truncate the NUL terminator")
+      call mpp_error(FATAL, "Length-aware sort test setup did not truncate the NUL terminator")
 
-    do j = 1, size(names)
-      name_pointers(j) = c_loc(names(j))
-    enddo
-    call fms_sort_this(name_pointers, 3, ids)
+    call fms_sort_this(names, ids)
 
     if (any(ids .ne. (/2, 3, 1/))) &
-      call mpp_error(FATAL, "Unterminated slot sort did not permute ids correctly")
+      call mpp_error(FATAL, "Length-aware sort did not permute ids correctly")
     if (index(names(1), c_null_char) .ne. 6) &
-      call mpp_error(FATAL, "Unterminated slot sort did not preserve alpha as a C string")
+      call mpp_error(FATAL, "Length-aware sort did not preserve alpha as a C string")
     if (index(names(2), c_null_char) .ne. 5) &
-      call mpp_error(FATAL, "Unterminated slot sort did not preserve beta as a C string")
+      call mpp_error(FATAL, "Length-aware sort did not preserve beta as a C string")
     if (names(3) .ne. repeat("z", 255)) &
-      call mpp_error(FATAL, "Unterminated slot sort did not preserve an unterminated full-width string")
+      call mpp_error(FATAL, "Length-aware sort did not preserve an unterminated full-width string")
 
     deallocate(names)
-    deallocate(name_pointers)
     deallocate(ids)
-  end subroutine check_unterminated_slot_sort
+  end subroutine check_length_aware_sort
 
   subroutine check_string
     if (string(.true.) .ne. "True") then

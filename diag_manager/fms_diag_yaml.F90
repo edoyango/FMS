@@ -586,11 +586,11 @@ subroutine diag_yaml_object_init(diag_subset_output)
   enddo nfiles_loop
 
   !> Sort the file list in alphabetical order
+  call fms_sort_this(file_list%file_name, file_list%diag_file_indices)
   file_list%file_pointer = fms_array_to_pointer(file_list%file_name)
-  call fms_sort_this(file_list%file_pointer, actual_num_files, file_list%diag_file_indices)
 
+  call fms_sort_this(variable_list%var_name, variable_list%diag_field_indices)
   variable_list%var_pointer = fms_array_to_pointer(variable_list%var_name)
-  call fms_sort_this(variable_list%var_pointer, total_nvars, variable_list%diag_field_indices)
 
   deallocate(diag_file_ids)
   diag_yaml_module_initialized = .true.
