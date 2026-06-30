@@ -364,19 +364,30 @@ subroutine fms_register_diag_field_obj &
   endif
 
   if (present(missing_value)) then
+    !> The copies below go through a nested select type so they are concrete
+    !! assignments; nvfortran's polymorphic intrinsic assignment (pgf90_poly_asn)
+    !! segfaults when the LHS is a CLASS(*) allocatable.
     select type (missing_value)
      type is (integer(kind=i4_kind))
              allocate(integer(kind=i4_kind) :: this%missing_value)
-             this%missing_value = missing_value
+             select type (mv => this%missing_value)
+             type is (integer(kind=i4_kind)) ; mv = missing_value
+             end select
      type is (integer(kind=i8_kind))
              allocate(integer(kind=i8_kind) :: this%missing_value)
-             this%missing_value = missing_value
+             select type (mv => this%missing_value)
+             type is (integer(kind=i8_kind)) ; mv = missing_value
+             end select
      type is (real(kind=r4_kind))
              allocate(real(kind=r4_kind) :: this%missing_value)
-             this%missing_value = missing_value
+             select type (mv => this%missing_value)
+             type is (real(kind=r4_kind)) ; mv = missing_value
+             end select
      type is (real(kind=r8_kind))
              allocate(real(kind=r8_kind) :: this%missing_value)
-             this%missing_value = missing_value
+             select type (mv => this%missing_value)
+             type is (real(kind=r8_kind)) ; mv = missing_value
+             end select
      class default
              call mpp_error("fms_register_diag_field_obj", &
                      "The missing value passed to register a diagnostic is not a r8, r4, i8, or i4",&
@@ -385,19 +396,28 @@ subroutine fms_register_diag_field_obj &
   endif
 
   if (present(varRANGE)) then
+    !> See note above: nested select type to avoid nvfortran polymorphic assignment.
     select type (varRANGE)
      type is (integer(kind=i4_kind))
              allocate(integer(kind=i4_kind) :: this%data_RANGE(2))
-             this%data_RANGE = varRANGE
+             select type (dr => this%data_RANGE)
+             type is (integer(kind=i4_kind)) ; dr = varRANGE
+             end select
      type is (integer(kind=i8_kind))
              allocate(integer(kind=i8_kind) :: this%data_RANGE(2))
-             this%data_RANGE = varRANGE
+             select type (dr => this%data_RANGE)
+             type is (integer(kind=i8_kind)) ; dr = varRANGE
+             end select
      type is (real(kind=r4_kind))
-             allocate(integer(kind=r4_kind) :: this%data_RANGE(2))
-             this%data_RANGE = varRANGE
+             allocate(real(kind=r4_kind) :: this%data_RANGE(2))
+             select type (dr => this%data_RANGE)
+             type is (real(kind=r4_kind)) ; dr = varRANGE
+             end select
      type is (real(kind=r8_kind))
-             allocate(integer(kind=r8_kind) :: this%data_RANGE(2))
-             this%data_RANGE = varRANGE
+             allocate(real(kind=r8_kind) :: this%data_RANGE(2))
+             select type (dr => this%data_RANGE)
+             type is (real(kind=r8_kind)) ; dr = varRANGE
+             end select
      class default
              call mpp_error("fms_register_diag_field_obj", &
                      "The varRange passed to register a diagnostic is not a r8, r4, i8, or i4",&
@@ -1664,13 +1684,15 @@ function get_default_missing_value(var_type) &
   integer, intent(in) :: var_type !< The type of the variable to return the missing value as
   class(*),allocatable :: rslt
 
+  !> Nested select type so the copy is concrete; nvfortran's polymorphic intrinsic
+  !! assignment (pgf90_poly_asn) segfaults on a CLASS(*) allocatable LHS.
   select case(var_type)
   case (r4)
     allocate(real(kind=r4_kind) :: rslt)
-    rslt = real(CMOR_MISSING_VALUE, kind=r4_kind)
+    select type (rslt) ; type is (real(kind=r4_kind)) ; rslt = real(CMOR_MISSING_VALUE, kind=r4_kind) ; end select
   case (r8)
     allocate(real(kind=r8_kind) :: rslt)
-    rslt = real(CMOR_MISSING_VALUE, kind=r8_kind)
+    select type (rslt) ; type is (real(kind=r8_kind)) ; rslt = real(CMOR_MISSING_VALUE, kind=r8_kind) ; end select
   case default
   end select
 end function
@@ -1933,14 +1955,16 @@ function find_missing_value(this, missing_val) &
   real(r8_kind), allocatable :: res !< returned r8 copy of missing_val
   integer :: vtype !< temp to hold enumerated variable type
 
+  !> Sourced allocation is equivalent to assigning to the (unallocated) intent(out)
+  !! allocatable but avoids nvfortran's polymorphic-assignment crash (pgf90_poly_asn).
   if(this%has_missing_value()) then
-    missing_val = this%get_missing_value(this%get_vartype())
+    allocate(missing_val, source=this%get_missing_value(this%get_vartype()))
   else
     vtype = this%get_vartype()
     if(vtype .eq. r8) then
-      missing_val = CMOR_MISSING_VALUE
+      allocate(missing_val, source=CMOR_MISSING_VALUE)
     else
-      missing_val = real(CMOR_MISSING_VALUE, r4_kind)
+      allocate(missing_val, source=real(CMOR_MISSING_VALUE, r4_kind))
     endif
   endif
 

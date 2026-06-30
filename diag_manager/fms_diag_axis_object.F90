@@ -231,12 +231,21 @@ module fms_diag_axis_object_mod
     select type (axis_data)
     type is (real(kind=r8_kind))
       allocate(real(kind=r8_kind) :: this%axis_data(axis_length))
-      this%axis_data = axis_data
+      !> Copy through a nested select type so this is a concrete real=real assignment.
+      !! nvfortran's polymorphic intrinsic assignment (pgf90_poly_asn) segfaults here.
+      select type (self_data => this%axis_data)
+      type is (real(kind=r8_kind))
+        self_data = axis_data
+      end select
       this%length = axis_length
       this%type_of_data = "double" !< This is what fms2_io expects in the register_field call
     type is (real(kind=r4_kind))
       allocate(real(kind=r4_kind) :: this%axis_data(axis_length))
-      this%axis_data = axis_data
+      !> See note above: avoid nvfortran polymorphic assignment.
+      select type (self_data => this%axis_data)
+      type is (real(kind=r4_kind))
+        self_data = axis_data
+      end select
       this%length = axis_length
       this%type_of_data = "float" !< This is what fms2_io expects in the register_field call
     class default
@@ -520,7 +529,10 @@ module fms_diag_axis_object_mod
       diurnal_axis%axis_name = trim(axis_name)
       diurnal_axis%long_name = trim(long_name)
       diurnal_axis%units = trim(units)
-      diurnal_axis%diurnal_data = diurnal_data
+      !> Allocate + nested select type concrete copy; nvfortran's polymorphic
+      !! intrinsic assignment (pgf90_poly_asn) segfaults on a CLASS(*) allocatable LHS.
+      allocate(real(kind=r8_kind) :: diurnal_axis%diurnal_data(size(diurnal_data)))
+      select type (dd => diurnal_axis%diurnal_data) ; type is (real(kind=r8_kind)) ; dd = diurnal_data ; end select
       diurnal_axis%edges_id = edges_id
       if (is_edges) &
         WRITE (edges_name,'(a,i2.2)') 'time_of_day_edges_', n_diurnal_samples

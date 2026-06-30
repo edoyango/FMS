@@ -231,19 +231,22 @@ subroutine get_buffer (this, buff_out, field_name)
   buff_size(4) = size(this%buffer,4)
   buff_size(5) = size(this%buffer,5)
 
+  !> The buff_out = buff copies below go through a nested select type so they are
+  !! concrete; nvfortran's polymorphic intrinsic assignment (pgf90_poly_asn)
+  !! segfaults when the LHS is a CLASS(*) allocatable.
   select type (buff=>this%buffer)
     type is (real(r4_kind))
       allocate(real(r4_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
-      buff_out = buff
+      select type (bo => buff_out) ; type is (real(r4_kind)) ; bo = buff ; end select
     type is (real(r8_kind))
       allocate(real(r8_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
-      buff_out = buff
+      select type (bo => buff_out) ; type is (real(r8_kind)) ; bo = buff ; end select
     type is (integer(i4_kind))
       allocate(integer(i4_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
-      buff_out = buff
+      select type (bo => buff_out) ; type is (integer(i4_kind)) ; bo = buff ; end select
     type is (integer(i8_kind))
       allocate(integer(i8_kind) :: buff_out(buff_size(1), buff_size(2), buff_size(3), buff_size(4), buff_size(5)))
-      buff_out = buff
+      select type (bo => buff_out) ; type is (integer(i8_kind)) ; bo = buff ; end select
     class default
       call mpp_error(FATAL, "get_buffer: buffer allocated to invalid type(must be integer or real, kind size 4 or 8)."&
                             //"field name: "// field_name)
@@ -516,7 +519,7 @@ subroutine write_buffer_wrapper_netcdf(this, fms2io_fileobj, unlim_dim_level, is
   if( using_diurnal ) then
     call this%get_remapped_diurnal_data(buff_ptr)
   else
-    buff_ptr = this%buffer
+    allocate(buff_ptr, source=this%buffer) !< sourced alloc avoids nvfortran polymorphic-assignment crash
   endif
 
   varname = diag_yaml%diag_fields(this%yaml_id)%get_var_outname()
@@ -553,7 +556,7 @@ subroutine write_buffer_wrapper_domain(this, fms2io_fileobj, unlim_dim_level, is
   if( using_diurnal ) then
     call this%get_remapped_diurnal_data(buff_ptr)
   else
-    buff_ptr = this%buffer
+    allocate(buff_ptr, source=this%buffer) !< sourced alloc avoids nvfortran polymorphic-assignment crash
   endif
 
   varname = diag_yaml%diag_fields(this%yaml_id)%get_var_outname()
@@ -590,7 +593,7 @@ subroutine write_buffer_wrapper_u(this, fms2io_fileobj, unlim_dim_level, is_diur
   if( using_diurnal ) then
     call this%get_remapped_diurnal_data(buff_ptr)
   else
-    buff_ptr = this%buffer
+    allocate(buff_ptr, source=this%buffer) !< sourced alloc avoids nvfortran polymorphic-assignment crash
   endif
 
   varname = diag_yaml%diag_fields(this%yaml_id)%get_var_outname()
@@ -855,7 +858,7 @@ subroutine get_remapped_diurnal_data(this, res)
       ke = this%buffer_dims(3); ze = this%buffer_dims(5)
     case (4)
       ! no need to remap if 4d
-      res = this%buffer
+      allocate(res, source=this%buffer) !< sourced alloc avoids nvfortran polymorphic-assignment crash
       return
   end select
 

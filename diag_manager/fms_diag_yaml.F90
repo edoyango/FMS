@@ -40,8 +40,7 @@ use fms_yaml_output_mod, only: fmsYamlOutKeys_type, fmsYamlOutValues_type, write
                                yaml_out_add_level2key, initialize_key_struct, initialize_val_struct
 use mpp_mod,         only: mpp_error, FATAL, NOTE, mpp_pe, mpp_root_pe, stdout
 use, intrinsic :: iso_c_binding, only : c_ptr, c_null_char
-use fms_string_utils_mod, only: fms_array_to_pointer, fms_find_my_string, fms_sort_this, fms_find_unique, string, &
-                                fms_f2c_string
+use fms_string_utils_mod, only: fms_array_to_pointer, fms_sort_this, string, fms_f2c_string
 use platform_mod, only: r4_kind, i4_kind, r8_kind, i8_kind, FMS_FILE_LEN
 use fms_mod, only: lowercase
 use fms_diag_time_utils_mod, only: set_time_type
@@ -366,6 +365,79 @@ result(diag_fields)
   diag_fields = this%diag_fields
 end function get_diag_fields
 
+!> @brief Compares two NUL-terminated strings using C `strcmp` (ASCII) semantics:
+!! the comparison stops at the first c_null_char, matching the byte-wise order the
+!! C `qsort`/binary-search helpers use. @returns .true. if a is "less than" b.
+pure logical function diag_name_lt(a, b) result(res)
+  character(len=*), intent(in) :: a !< First string (may be NUL-terminated)
+  character(len=*), intent(in) :: b !< Second string (may be NUL-terminated)
+  integer :: la !< Length of a up to (not including) the NUL terminator
+  integer :: lb !< Length of b up to (not including) the NUL terminator
+  integer :: ka !< Position of the NUL in a (0 if none)
+  integer :: kb !< Position of the NUL in b (0 if none)
+  ka = index(a, c_null_char)
+  kb = index(b, c_null_char)
+  la = len(a)
+  lb = len(b)
+  if (ka > 0) la = ka - 1
+  if (kb > 0) lb = kb - 1
+  res = llt(a(1:la), b(1:lb))
+end function diag_name_lt
+
+!> @brief Pure-Fortran replacement for the C `fms_find_my_string` binary search.
+!! Searches the already-sorted (strcmp order) array @p names for @p string_to_find
+!! and returns the 1-based positions of all matches. If the string is not found,
+!! returns a length-1 array holding diag_null (-999), matching the C contract.
+function diag_find_string(names, string_to_find) result(ifind)
+  character(len=*), intent(in) :: names(:)        !< Sorted array of NUL-terminated strings
+  character(len=*), intent(in) :: string_to_find  !< NUL-terminated key to search for
+  integer, allocatable :: ifind(:)                !< Matching 1-based positions (or [diag_null])
+  integer :: n      !< Size of names
+  integer :: lo, hi !< Binary-search bounds
+  integer :: k      !< Probe index
+  integer :: m      !< Index of a found match (0 if none)
+  integer :: first, last !< Range of equal matches
+  integer :: i      !< For looping
+  logical :: lt1, lt2 !< names(k) < key, key < names(k)
+  n = size(names)
+  m = 0
+  lo = 1
+  hi = n
+  do while (lo <= hi)
+    k = (lo + hi) / 2
+    lt1 = diag_name_lt(names(k), string_to_find)
+    lt2 = diag_name_lt(string_to_find, names(k))
+    if (.not. lt1 .and. .not. lt2) then
+      m = k          !< Equal: match found
+      exit
+    else if (lt1) then
+      lo = k + 1     !< names(k) < key -> search right half
+    else
+      hi = k - 1     !< key < names(k) -> search left half
+    endif
+  enddo
+  if (m == 0) then
+    allocate(ifind(1))
+    ifind(1) = diag_null
+    return
+  endif
+  !> Expand to all adjacent equal entries (a field can appear in multiple files)
+  first = m
+  do while (first > 1)
+    if (diag_name_lt(names(first-1), string_to_find) .or. diag_name_lt(string_to_find, names(first-1))) exit
+    first = first - 1
+  enddo
+  last = m
+  do while (last < n)
+    if (diag_name_lt(names(last+1), string_to_find) .or. diag_name_lt(string_to_find, names(last+1))) exit
+    last = last + 1
+  enddo
+  allocate(ifind(last - first + 1))
+  do i = 1, size(ifind)
+    ifind(i) = first + i - 1
+  enddo
+end function diag_find_string
+
 !> @brief Uses the yaml_parser_mod to read in the diag_table and fill in the
 !! diag_yaml object
 subroutine diag_yaml_object_init(diag_subset_output)
@@ -585,7 +657,8 @@ subroutine diag_yaml_object_init(diag_subset_output)
     deallocate(mod_name)
   enddo nfiles_loop
 
-  !> Sort the file list in alphabetical order
+  !> Sort the strings in place first, then build the pointer arrays over the
+  !! now-sorted strings so any C-string helper users see the sorted order.
   call fms_sort_this(file_list%file_name, file_list%diag_file_indices)
   file_list%file_pointer = fms_array_to_pointer(file_list%file_name)
 
@@ -1610,9 +1683,23 @@ end function has_diag_fields
 !! @return The number of unique diag_fields
 function get_num_unique_fields() &
   result(nfields)
-  integer :: nfields
-  nfields = fms_find_unique(variable_list%var_pointer, size(variable_list%var_pointer))
-
+  integer :: nfields !< Number of unique diag fields
+  integer :: i       !< For looping
+  integer :: n       !< Number of entries in the (already-sorted) variable list
+  !> variable_list%var_name is already sorted in bounded C-string order by
+  !! fms_sort_this, so unique entries are just the adjacent distinct ones.
+  n = size(variable_list%var_name)
+  if (n == 0) then
+    nfields = 0
+    return
+  endif
+  nfields = 1
+  do i = 2, n
+    !> a /= b in strcmp terms iff (a<b) .or. (b<a)
+    if (diag_name_lt(variable_list%var_name(i), variable_list%var_name(i-1)) .or. &
+        diag_name_lt(variable_list%var_name(i-1), variable_list%var_name(i))) &
+      nfields = nfields + 1
+  enddo
 end function get_num_unique_fields
 
 !> @brief Determines if a diag_field is in the diag_yaml_object
@@ -1625,7 +1712,7 @@ result(indices)
 
   integer, allocatable :: indices(:)
 
-  indices = fms_find_my_string(variable_list%var_pointer, size(variable_list%var_pointer), &
+  indices = diag_find_string(variable_list%var_name, &
                                & lowercase(trim(diag_field_name))//":"//lowercase(trim(module_name)//c_null_char))
 end function find_diag_field
 
@@ -1686,7 +1773,7 @@ function get_diag_files_id(indices) &
     filename = diag_yaml%diag_fields(field_id)%var_fname
 
     !< File indice of that file in the array of list of sorted files
-    file_indices = fms_find_my_string(file_list%file_pointer, size(file_list%file_pointer), &
+    file_indices = diag_find_string(file_list%file_name, &
       & trim(filename)//c_null_char)
 
     if (size(file_indices) .ne. 1) &

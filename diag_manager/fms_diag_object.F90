@@ -266,8 +266,8 @@ integer function fms_register_diag_field_obj &
 fms_register_diag_field_obj = DIAG_FIELD_NOT_FOUND
 CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling with -Duse_yaml")
 #else
- diag_field_indices = find_diag_field(varname, modname)
- if (diag_field_indices(1) .eq. diag_null) then
+  diag_field_indices = find_diag_field(varname, modname)
+  if (diag_field_indices(1) .eq. diag_null) then
     !< The field was not found in the table, so return DIAG_FIELD_NOT_FOUND
     fms_register_diag_field_obj = DIAG_FIELD_NOT_FOUND
     deallocate(diag_field_indices)
@@ -390,16 +390,34 @@ INTEGER FUNCTION fms_register_diag_field_scalar(this,module_name, field_name, in
     CHARACTER(len=*), OPTIONAL, INTENT(in) :: realm         !< String to set as the modeling_realm attribute
     LOGICAL,          OPTIONAL, INTENT(in) :: multiple_send_data !< .True. if send data is called, multiple times
                                                                  !! for the same time
+    integer, allocatable :: diag_field_indices(:)
+    logical :: has_forwarded_optional
 
 #ifndef use_yaml
 fms_register_diag_field_scalar=DIAG_FIELD_NOT_FOUND
 CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling with -Duse_yaml")
 #else
-    fms_register_diag_field_scalar = this%register(&
-      & module_name, field_name, init_time=init_time, &
-      & longname=long_name, units=units, missing_value=missing_value, varrange=var_range, &
-      & standname=standard_name, do_not_log=do_not_log, err_msg=err_msg, &
-      & area=area, volume=volume, realm=realm, multiple_send_data=multiple_send_data)
+    diag_field_indices = find_diag_field(field_name, module_name)
+    if (diag_field_indices(1) .eq. diag_null) then
+      fms_register_diag_field_scalar = DIAG_FIELD_NOT_FOUND
+      deallocate(diag_field_indices)
+      return
+    endif
+    deallocate(diag_field_indices)
+
+    has_forwarded_optional = present(init_time) .or. present(long_name) .or. present(units) .or. &
+      present(missing_value) .or. present(var_range) .or. present(standard_name) .or. &
+      present(do_not_log) .or. present(err_msg) .or. present(area) .or. present(volume) .or. &
+      present(realm) .or. present(multiple_send_data)
+    if (.not. has_forwarded_optional) then
+      fms_register_diag_field_scalar = this%register(module_name, field_name)
+    else
+      fms_register_diag_field_scalar = this%register(&
+        & module_name, field_name, init_time=init_time, &
+        & longname=long_name, units=units, missing_value=missing_value, varrange=var_range, &
+        & standname=standard_name, do_not_log=do_not_log, err_msg=err_msg, &
+        & area=area, volume=volume, realm=realm, multiple_send_data=multiple_send_data)
+    endif
 #endif
 end function fms_register_diag_field_scalar
 
@@ -434,18 +452,37 @@ INTEGER FUNCTION fms_register_diag_field_array(this, module_name, field_name, ax
     CHARACTER(len=*), OPTIONAL, INTENT(in) :: realm         !< String to set as the modeling_realm attribute
     LOGICAL,          OPTIONAL, INTENT(in) :: multiple_send_data !< .True. if send data is called, multiple times
                                                                  !! for the same time
+    integer, allocatable :: diag_field_indices(:)
+    logical :: has_forwarded_optional
 
 
 #ifndef use_yaml
 fms_register_diag_field_array=DIAG_FIELD_NOT_FOUND
 CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling with -Duse_yaml")
 #else
-    fms_register_diag_field_array = this%register( &
-      & module_name, field_name, init_time=init_time, &
-      & axes=axes, longname=long_name, units=units, missing_value=missing_value, varrange=var_range, &
-      & mask_variant=mask_variant, standname=standard_name, do_not_log=do_not_log, err_msg=err_msg, &
-      & interp_method=interp_method, tile_count=tile_count, area=area, volume=volume, realm=realm, &
-      & multiple_send_data=multiple_send_data)
+    diag_field_indices = find_diag_field(field_name, module_name)
+    if (diag_field_indices(1) .eq. diag_null) then
+      fms_register_diag_field_array = DIAG_FIELD_NOT_FOUND
+      deallocate(diag_field_indices)
+      return
+    endif
+    deallocate(diag_field_indices)
+
+    has_forwarded_optional = present(init_time) .or. present(long_name) .or. present(units) .or. &
+      present(missing_value) .or. present(var_range) .or. present(mask_variant) .or. &
+      present(standard_name) .or. present(do_not_log) .or. present(err_msg) .or. &
+      present(interp_method) .or. present(tile_count) .or. present(area) .or. present(volume) .or. &
+      present(realm) .or. present(multiple_send_data)
+    if (.not. has_forwarded_optional) then
+      fms_register_diag_field_array = this%register(module_name, field_name, axes=axes)
+    else
+      fms_register_diag_field_array = this%register( &
+        & module_name, field_name, init_time=init_time, &
+        & axes=axes, longname=long_name, units=units, missing_value=missing_value, varrange=var_range, &
+        & mask_variant=mask_variant, standname=standard_name, do_not_log=do_not_log, err_msg=err_msg, &
+        & interp_method=interp_method, tile_count=tile_count, area=area, volume=volume, realm=realm, &
+        & multiple_send_data=multiple_send_data)
+    endif
 #endif
 end function fms_register_diag_field_array
 
@@ -478,6 +515,10 @@ INTEGER FUNCTION fms_register_static_field(this, module_name, field_name, axes, 
                                                                           !! with this field
     CHARACTER(len=*),               OPTIONAL, INTENT(in) :: realm         !< String to set as the value to the
                                                                           !! modeling_realm attribute
+    integer :: axes_size
+    integer, allocatable :: diag_field_indices(:)
+    logical :: has_forwarded_optional
+    logical :: is_null_axis
 
 #ifndef use_yaml
 fms_register_static_field=DIAG_FIELD_NOT_FOUND
@@ -485,21 +526,45 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
 #else
   !TODO The register_static_field interface does not have the capabiliy to register a variable as a "scalar"
   !     since the axes argument is required, this forced model code to pass in a null_axis_id as an argument
-  if (size(axes) .eq. 1 .and. axes(1) .eq. null_axis_id) then
+  diag_field_indices = find_diag_field(field_name, module_name)
+  if (diag_field_indices(1) .eq. diag_null) then
+    fms_register_static_field = DIAG_FIELD_NOT_FOUND
+    deallocate(diag_field_indices)
+    return
+  endif
+  deallocate(diag_field_indices)
+
+  has_forwarded_optional = present(long_name) .or. present(units) .or. present(missing_value) .or. &
+    present(range) .or. present(mask_variant) .or. present(standard_name) .or. present(do_not_log) .or. &
+    present(interp_method) .or. present(tile_count) .or. present(area) .or. present(volume) .or. present(realm)
+  axes_size = size(axes)
+  is_null_axis = .false.
+  if (axes_size .ge. 1) then
+    if (axes_size .eq. 1) is_null_axis = (axes(1) .eq. null_axis_id)
+  endif
+  if (is_null_axis) then
     ! If they are passing in the null_axis_ids, ignore the `axes` argument
-    fms_register_static_field = this%register( &
-      & module_name, field_name, &
-      & longname=long_name, units=units, missing_value=missing_value, varrange=range, &
-      & mask_variant=mask_variant, do_not_log=do_not_log, interp_method=interp_method, tile_count=tile_count, &
-      & standname=standard_name, area=area, volume=volume, realm=realm, &
-      & static=.true.)
+    if (has_forwarded_optional) then
+      fms_register_static_field = this%register( &
+        & module_name, field_name, &
+        & longname=long_name, units=units, missing_value=missing_value, varrange=range, &
+        & mask_variant=mask_variant, do_not_log=do_not_log, interp_method=interp_method, tile_count=tile_count, &
+        & standname=standard_name, area=area, volume=volume, realm=realm, &
+        & static=.true.)
+    else
+      fms_register_static_field = this%register(module_name, field_name, static=.true.)
+    endif
   else
-    fms_register_static_field = this%register( &
-      & module_name, field_name, axes=axes, &
-      & longname=long_name, units=units, missing_value=missing_value, varrange=range, &
-      & mask_variant=mask_variant, do_not_log=do_not_log, interp_method=interp_method, tile_count=tile_count, &
-      & standname=standard_name, area=area, volume=volume, realm=realm, &
-      & static=.true.)
+    if (has_forwarded_optional) then
+      fms_register_static_field = this%register( &
+        & module_name, field_name, axes=axes, &
+        & longname=long_name, units=units, missing_value=missing_value, varrange=range, &
+        & mask_variant=mask_variant, do_not_log=do_not_log, interp_method=interp_method, tile_count=tile_count, &
+        & standname=standard_name, area=area, volume=volume, realm=realm, &
+        & static=.true.)
+    else
+      fms_register_static_field = this%register(module_name, field_name, axes=axes, static=.true.)
+    endif
   endif
 #endif
 end function fms_register_static_field

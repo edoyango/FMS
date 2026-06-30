@@ -118,19 +118,22 @@ module fms_diag_input_buffer_mod
       end select
     enddo axis_loop
 
+    !> The zero-init below goes through a nested select type so it is a concrete
+    !! assignment; nvfortran's polymorphic intrinsic assignment (pgf90_poly_asn)
+    !! segfaults when the LHS is a CLASS(*) allocatable.
     select type (input_data)
     type is (real(r4_kind))
       allocate(real(kind=r4_kind) :: this%buffer(length(1), length(2), length(3), length(4)))
-      this%buffer = 0.0_r4_kind
+      select type (b => this%buffer) ; type is (real(r4_kind)) ; b = 0.0_r4_kind ; end select
     type is (real(r8_kind))
       allocate(real(kind=r8_kind) :: this%buffer(length(1), length(2), length(3), length(4)))
-      this%buffer = 0.0_r8_kind
+      select type (b => this%buffer) ; type is (real(r8_kind)) ; b = 0.0_r8_kind ; end select
     type is (integer(i4_kind))
       allocate(integer(kind=i4_kind) :: this%buffer(length(1), length(2), length(3), length(4)))
-      this%buffer = 0_i4_kind
+      select type (b => this%buffer) ; type is (integer(i4_kind)) ; b = 0_i4_kind ; end select
     type is (integer(i8_kind))
-      allocate(integer(kind=i4_kind) :: this%buffer(length(1), length(2), length(3), length(4)))
-      this%buffer = 0_i8_kind
+      allocate(integer(kind=i8_kind) :: this%buffer(length(1), length(2), length(3), length(4)))
+      select type (b => this%buffer) ; type is (integer(i8_kind)) ; b = 0_i8_kind ; end select
     class default
       err_msg = "The data input is not one of the supported types. &
                 &Only r4, r8, i4, and i8 types are supported."
