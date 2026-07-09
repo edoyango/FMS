@@ -58,6 +58,7 @@ option(FPIC        "Build with position independent code" OFF)
 option(SHARED_LIBS "Build shared/dynamic libraries"       OFF)
 option(OPENACC     "Build FMS with OpenACC support"       OFF)
 option(UNIT_TESTS  "Build FMS tests"                      OFF)
+option(FMS_OMPOFFLOAD "Enable GPU-offload compiler flags (OpenMP/OpenACC target offload)" OFF)
 
 # Options for compiler definitions
 option(ENABLE_QUAD_PRECISION "Enable compiler definition -DENABLE_QUAD_PRECISION"  ON)
@@ -68,6 +69,13 @@ option(WITH_YAML             "Enable compiler definition -Duse_yaml"            
 if(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
   set(ENABLE_QUAD_PRECISION OFF)
   message(WARNING "NVHPC does not support building FMS with QUAD_PRECISION!")
+endif()
+
+# FMS_OMPOFFLOAD flags are only implemented for NVHPC today (see
+# cmake/compiler_flags_NVHPC_Fortran.cmake). Other compiler_flags_<ID>_Fortran.cmake
+# modules can add their own `if(FMS_OMPOFFLOAD)` block to support it later.
+if(FMS_OMPOFFLOAD AND NOT CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
+  message(FATAL_ERROR "FMS_OMPOFFLOAD is only supported for the NVHPC Fortran compiler (got ${CMAKE_Fortran_COMPILER_ID})")
 endif()
 # Testing-specific options
 set(OVERSUBSCRIBE_FLAG " --oversubscribe " CACHE STRING "Flag for mpirun to use more cores than available")

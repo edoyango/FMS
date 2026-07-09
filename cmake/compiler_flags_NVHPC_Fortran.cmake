@@ -4,6 +4,11 @@ set(r8_flags "-r8") # Fortran flags for 64BIT precision
 # NVHPC Fortan
 set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} ")
 
+# GPU offload flags, enabled via -DFMS_OMPOFFLOAD=ON
+if(FMS_OMPOFFLOAD)
+  set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -Mnovect -Mnofma -mp=gpu -acc=gpu -gpu=mem:separate")
+endif()
+
 set(CMAKE_Fortran_FLAGS_RELEASE "-O3")
 
 set(CMAKE_Fortran_FLAGS_DEBUG "-O0" )
