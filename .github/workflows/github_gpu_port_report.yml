@@ -1,8 +1,12 @@
-# Tracks GPU-porting progress: builds FMS with gcov instrumentation, exercises it with the
-# test_fms suite, then cross-references execution coverage against `do concurrent` / `!$omp
-# target` ported regions (see .github/tools/track_gpu_port.py). Read-only: this job checks
-# out and runs a PR's (possibly untrusted, fork-authored) code, so it must never hold write
-# access. Posting the PR comment and publishing the HTML report happen in the separate
+# Tracks GPU-porting progress: builds FMS with gcov instrumentation, exercises it by running
+# a shortened benchmark_ALE case with MOM6, then cross-references execution coverage against
+# `do concurrent` / `!$omp target` ported regions (see .github/tools/track_gpu_port.py).
+# Mirrors the corresponding gpu-port-report job in MOM6's own verify-linux.yml, with the
+# roles swapped: there, FMS is a fixed dependency and MOM6 is instrumented; here, MOM6 dev/gpu
+# (co-developed against this FMS fork) is a fixed, uninstrumented harness used only to
+# exercise this FMS checkout, which is instrumented. Read-only: this job checks out and runs
+# a PR's (possibly untrusted, fork-authored) code, so it must never hold write access. Posting
+# the PR comment and publishing the HTML report happen in the separate
 # github_gpu_port_comment.yml workflow, triggered by workflow_run, which runs with the base
 # repository's permissions and does not check out PR code.
 
@@ -27,39 +31,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare GNU autoconf for build
-        run: autoreconf -if
+      - name: Set MOM6 checkout path
+        run: echo "MOM6_DIR=${{ runner.temp }}/mom6" >> "$GITHUB_ENV"
 
-      - name: Configure the build with code coverage instrumentation
+      - name: Clone MOM6 to build and exercise this FMS checkout
         run: |
-          ./configure --with-yaml \
-            FCFLAGS="$FCFLAGS -g -O0 --coverage" \
-            CFLAGS="$CFLAGS -g -O0 --coverage" \
-            LDFLAGS="$LDFLAGS --coverage" \
-          || cat config.log
+          git clone --depth 1 --recursive --shallow-submodules \
+            --branch dev/gpu https://github.com/edoyango/MOM6.git "$MOM6_DIR"
 
-      # Build and run test_fms — the exercise step that produces .gcda. Test failures are
-      # not fatal here: this job tracks porting coverage, not test correctness (that's
-      # already covered by github_autotools_gnu.yml / github_cmake_gnu.yml), and a flaky or
-      # unrelated failing test shouldn't block the whole coverage report.
-      - name: Build and run the test_fms suite
-        id: check
-        continue-on-error: true
-        run: make -j check
+      # MOM6's .testing/build/deps machinery normally `git clone`s its own pinned copy of
+      # FMS. Symlinking this checkout in as its source instead lets MOM6's existing FMS
+      # build recipe (ac/deps/Makefile.fms.in) compile *this* checkout, so gcov's Source:
+      # paths resolve 1:1 against --src-root below, with no second copy involved.
+      - name: Point MOM6's FMS dependency at this checkout
+        run: |
+          mkdir -p "$MOM6_DIR/.testing/build/deps/fms"
+          ln -s "$GITHUB_WORKSPACE" "$MOM6_DIR/.testing/build/deps/fms/src"
 
-      - name: Show test failures (informational; does not fail this job)
-        if: steps.check.outcome == 'failure'
-        run: grep -RE "^FAIL:|^XPASS:" --include="*.log" . || true
+      # FCFLAGS_FMS only affects MOM6's FMS dependency build, not MOM6 itself — MOM6 is
+      # built uninstrumented just below, since only FMS's porting progress is tracked.
+      - name: Build FMS with code coverage instrumentation
+        run: |
+          make -C "$MOM6_DIR/.testing" -j \
+            FCFLAGS_FMS="-g -O0 --coverage" \
+            build/deps/lib/libFMS.a
 
-      # Autotools compiles in-tree (no separate build dir), so each .gcno/.gcda lands next
-      # to the .o it was compiled from. Running gcov from within each such directory writes
-      # the matching .gcov alongside it, which track_gpu_port.py's --gcov-dir then finds via
-      # a recursive search from the repo root.
+      - name: Build MOM6 against the coverage-instrumented FMS
+        run: make -C "$MOM6_DIR/.testing" -j build/symmetric/MOM6
+
+      # Only the benchmark_ALE inputs are needed here — MOM6 was already built above.
+      - name: Clone MOM6-gpu/MOM6-examples for the benchmark_ALE case
+        run: git clone --depth 1 https://github.com/MOM6-gpu/MOM6-examples.git MOM6-examples
+
+      # Force a single-rank layout and a short run: this is a coverage smoke run, not a
+      # scaling test, and the runner may have far fewer cores than whatever layout
+      # benchmark_ALE happens to be checked in with.
+      - name: Shorten benchmark_ALE to a single-rank, single short run
+        run: |
+          {
+            echo '#override DAYMAX = 0.5'
+            echo '#override LAYOUT = 1,1'
+          } >> MOM6-examples/ocean_only/benchmark_ALE/MOM_override
+
+      - name: Run benchmark_ALE with the coverage-instrumented FMS
+        working-directory: MOM6-examples/ocean_only/benchmark_ALE
+        run: mpirun -np 1 "$MOM6_DIR/.testing/build/symmetric/MOM6"
+
       - name: Generate gcov reports
-        run: |
-          find . -name '*.gcda' -printf '%h\n' | sort -u | while read -r d; do
-            ( cd "$d" && gcov -b ./*.gcda > /dev/null )
-          done
+        working-directory: ${{ env.MOM6_DIR }}/.testing/build/deps/fms/build
+        run: gcov -b *.gcda
 
       # List the .F90/.f90 files this PR actually touches, so the comment can report a
       # "this PR's files" subset in addition to the repo-wide total. Paths are left
@@ -123,7 +143,7 @@ jobs:
           python3 .github/tools/track_gpu_port.py \
             --src-root . \
             --exclude test_fms \
-            --gcov-dir . \
+            --gcov-dir "$MOM6_DIR/.testing/build/deps/fms/build" \
             --out-md gpu_port_report.md \
             --out-json gpu_port_report.json \
             --out-html gpu_port_html \
