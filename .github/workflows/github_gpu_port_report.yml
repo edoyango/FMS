@@ -56,8 +56,12 @@ jobs:
             FCFLAGS_FMS="-g -O0 --coverage" \
             build/deps/lib/libFMS.a
 
+      # libFMS.a's coverage instrumentation calls __gcov_init/__gcov_exit/__gcov_merge_add,
+      # which only get resolved if the final binary is linked with --coverage too (it pulls
+      # in libgcov). LDFLAGS_USER is a link-only flag applied everywhere in .testing/Makefile,
+      # so this doesn't add compile-time instrumentation to MOM6 itself — it stays plain.
       - name: Build MOM6 against the coverage-instrumented FMS
-        run: make -C "$MOM6_DIR/.testing" -j build/symmetric/MOM6
+        run: make -C "$MOM6_DIR/.testing" -j LDFLAGS_USER="--coverage" build/symmetric/MOM6
 
       # Only the benchmark_ALE inputs are needed here — MOM6 was already built above.
       - name: Clone MOM6-gpu/MOM6-examples for the benchmark_ALE case
