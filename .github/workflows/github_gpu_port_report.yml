@@ -1,0 +1,218 @@
+# Tracks GPU-porting progress: builds FMS with gcov instrumentation, exercises it by running
+# a shortened benchmark_ALE case with MOM6, then cross-references execution coverage against
+# `do concurrent` / `!$omp target` ported regions (see .github/tools/track_gpu_port.py).
+# Mirrors the corresponding gpu-port-report job in MOM6's own verify-linux.yml, with the
+# roles swapped: there, FMS is a fixed dependency and MOM6 is instrumented; here, MOM6 dev/gpu
+# (co-developed against this FMS fork) is a fixed, uninstrumented harness used only to
+# exercise this FMS checkout, which is instrumented. Read-only: this job checks out and runs
+# a PR's (possibly untrusted, fork-authored) code, so it must never hold write access. Posting
+# the PR comment and publishing the HTML report happen in the separate
+# github_gpu_port_comment.yml workflow, triggered by workflow_run, which runs with the base
+# repository's permissions and does not check out PR code.
+
+name: GPU port coverage report
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gpu-port-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # This job runs on the bare runner rather than in the fms-ci-rocky-gnu container used
+      # by this repo's other CI jobs: that container's GCC is too old to build the
+      # `do concurrent` / OpenMP target offload code being ported. Installs the same packages
+      # as MOM6's own .github/actions/ubuntu-setup, since MOM6 is built and run directly here.
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y netcdf-bin libnetcdf-dev libnetcdff-dev openmpi-bin libopenmpi-dev
+
+      - name: Set MOM6 checkout path
+        run: echo "MOM6_DIR=${{ runner.temp }}/mom6" >> "$GITHUB_ENV"
+
+      - name: Clone MOM6 to build and exercise this FMS checkout
+        run: |
+          git clone --depth 1 --recursive --shallow-submodules \
+            --branch dev/gpu https://github.com/edoyango/MOM6.git "$MOM6_DIR"
+
+      # MOM6's .testing/build/deps machinery normally `git clone`s its own pinned copy of
+      # FMS. Symlinking this checkout in as its source instead lets MOM6's existing FMS
+      # build recipe (ac/deps/Makefile.fms.in) compile *this* checkout, so gcov's Source:
+      # paths resolve 1:1 against --src-root below, with no second copy involved.
+      - name: Point MOM6's FMS dependency at this checkout
+        run: |
+          mkdir -p "$MOM6_DIR/.testing/build/deps/fms"
+          ln -s "$GITHUB_WORKSPACE" "$MOM6_DIR/.testing/build/deps/fms/src"
+
+      # FCFLAGS_FMS only affects MOM6's FMS dependency build, not MOM6 itself — MOM6 is
+      # built uninstrumented just below, since only FMS's porting progress is tracked.
+      - name: Build FMS with code coverage instrumentation
+        run: |
+          make -C "$MOM6_DIR/.testing" -j \
+            FCFLAGS_FMS="-g -O0 --coverage" \
+            build/deps/lib/libFMS.a
+
+      # libFMS.a's coverage instrumentation calls __gcov_init/__gcov_exit/__gcov_merge_add,
+      # which only get resolved if the final binary is linked with --coverage too (it pulls
+      # in libgcov). LDFLAGS_USER is a link-only flag applied everywhere in .testing/Makefile,
+      # so this doesn't add compile-time instrumentation to MOM6 itself — it stays plain.
+      - name: Build MOM6 against the coverage-instrumented FMS
+        run: make -C "$MOM6_DIR/.testing" -j LDFLAGS_USER="--coverage" build/symmetric/MOM6
+
+      # Only the benchmark_ALE inputs are needed here — MOM6 was already built above.
+      - name: Clone MOM6-gpu/MOM6-examples for the benchmark_ALE case
+        run: git clone --depth 1 https://github.com/MOM6-gpu/MOM6-examples.git MOM6-examples
+
+      # Force a single-rank layout and a short run: this is a coverage smoke run, not a
+      # scaling test, and the runner may have far fewer cores than whatever layout
+      # benchmark_ALE happens to be checked in with.
+      - name: Shorten benchmark_ALE to a single-rank, single short run
+        run: |
+          {
+            echo '#override DAYMAX = 0.5'
+            echo '#override LAYOUT = 1,1'
+          } >> MOM6-examples/ocean_only/benchmark_ALE/MOM_override
+
+      - name: Run benchmark_ALE with the coverage-instrumented FMS
+        working-directory: MOM6-examples/ocean_only/benchmark_ALE
+        run: mpirun -np 1 "$MOM6_DIR/.testing/build/symmetric/MOM6"
+
+      - name: Generate gcov reports
+        working-directory: ${{ env.MOM6_DIR }}/.testing/build/deps/fms/build
+        run: gcov -b *.gcda
+
+      # List the .F90/.f90 files this PR actually touches, so the comment can report a
+      # "this PR's files" subset in addition to the repo-wide total. Paths are left
+      # repo-root-relative to match track_gpu_port.py's --src-root . output.
+      - name: List source files changed by this PR
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}"
+          git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            -- '*.F90' '*.f90' > changed_files.txt
+
+      # Baseline for the "since base branch" delta: the GPU port JSON snapshot uploaded by
+      # the most recent successful run of this workflow on the PR's base branch. This is an
+      # approximation of the merge-base (not an exact rebuild of it), traded off deliberately
+      # against not doubling CI cost with a second coverage build per PR. Uses
+      # actions/github-script (not the `gh` CLI) so this doesn't depend on `gh` being present
+      # in the container image.
+      - name: Find latest GPU port snapshot on the base branch
+        if: github.event_name == 'pull_request'
+        id: baseline
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'github_gpu_port_report.yml',
+              branch: context.payload.pull_request.base.ref,
+              status: 'success',
+              per_page: 1,
+            });
+            const runId = runs.data.workflow_runs[0]?.id;
+            if (runId) core.setOutput('run_id', String(runId));
+
+      - name: Download baseline GPU port snapshot
+        if: github.event_name == 'pull_request' && steps.baseline.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: gpu-port-json
+          run-id: ${{ steps.baseline.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: baseline
+
+      # --exclude test_fms: track porting progress in the FMS library itself, not in test
+      # infrastructure that happens to use do concurrent / !$omp target to test offload
+      # behavior (test_mpp_domains.F90, test_corner_mosaic.F90).
+      - name: Generate GPU port coverage report
+        run: |
+          EXTRA_ARGS=()
+          if [ -f baseline/gpu_port_report.json ]; then
+            EXTRA_ARGS+=(--baseline-json baseline/gpu_port_report.json)
+          fi
+          if [ -f changed_files.txt ]; then
+            EXTRA_ARGS+=(--changed-files changed_files.txt --out-comment gpu_port_comment.md)
+          fi
+          python3 .github/tools/track_gpu_port.py \
+            --src-root . \
+            --exclude test_fms \
+            --gcov-dir "$MOM6_DIR/.testing/build/deps/fms/build" \
+            --out-md gpu_port_report.md \
+            --out-json gpu_port_report.json \
+            --out-html gpu_port_html \
+            --github-annotations \
+            --verbose \
+            "${EXTRA_ARGS[@]}"
+
+      - name: Publish report to job summary
+        if: always()
+        run: |
+          if [ -f gpu_port_report.md ]; then
+            cat gpu_port_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-port-report
+          path: gpu_port_report.md
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Becomes the baseline snapshot the *next* PR against this branch diffs against —
+      # uploaded on every run (push or PR) so pushes to the base branch keep it current.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-port-json
+          path: gpu_port_report.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # gpu_port_comment.md is picked up and posted/updated on the PR itself by
+      # github_gpu_port_comment.yml, which runs via workflow_run so it has write access even
+      # for PRs from forks (this job intentionally does not — see permissions: above).
+      - name: Save PR number for the comment workflow
+        if: always() && github.event_name == 'pull_request'
+        run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'pull_request'
+        with:
+          name: gpu-port-pr-comment
+          path: |
+            gpu_port_comment.md
+            pr_number.txt
+          retention-days: 1
+          if-no-files-found: ignore
+
+      # Picked up by github_gpu_port_comment.yml (via workflow_run, so it has write access)
+      # and published to the gh-pages branch under pr-<number>/, then linked from the PR
+      # comment above.
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'pull_request'
+        with:
+          name: gpu-port-html
+          path: |
+            gpu_port_html
+            pr_number.txt
+          retention-days: 1
+          if-no-files-found: ignore
