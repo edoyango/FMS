@@ -25,11 +25,18 @@ permissions:
 jobs:
   gpu-port-report:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/noaa-gfdl/fms/fms-ci-rocky-gnu:15.1.0
 
     steps:
       - uses: actions/checkout@v4
+
+      # This job runs on the bare runner rather than in the fms-ci-rocky-gnu container used
+      # by this repo's other CI jobs: that container's GCC is too old to build the
+      # `do concurrent` / OpenMP target offload code being ported. Installs the same packages
+      # as MOM6's own .github/actions/ubuntu-setup, since MOM6 is built and run directly here.
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y netcdf-bin libnetcdf-dev libnetcdff-dev openmpi-bin libopenmpi-dev
 
       - name: Set MOM6 checkout path
         run: echo "MOM6_DIR=${{ runner.temp }}/mom6" >> "$GITHUB_ENV"
