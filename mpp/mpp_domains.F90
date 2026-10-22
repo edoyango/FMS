@@ -1321,10 +1321,26 @@ module mpp_domains_mod
   !> @param
   !> @ingroup mpp_domains_mod
   interface mpp_create_group_update
+#ifndef __NVCOMPILER
      module procedure mpp_create_group_update_r4
      module procedure mpp_create_group_update_r4_v
      module procedure mpp_create_group_update_r8
      module procedure mpp_create_group_update_r8_v
+!! rank specific interfaces are needed for NVHPC because it does not support deferred-rank arrays
+#else
+     module procedure mpp_create_group_update_r4_2d
+     module procedure mpp_create_group_update_r4_2dv
+     module procedure mpp_create_group_update_r4_3d
+     module procedure mpp_create_group_update_r4_3dv
+     module procedure mpp_create_group_update_r4_4d
+     module procedure mpp_create_group_update_r4_4dv
+     module procedure mpp_create_group_update_r8_2d
+     module procedure mpp_create_group_update_r8_2dv
+     module procedure mpp_create_group_update_r8_3d
+     module procedure mpp_create_group_update_r8_3dv
+     module procedure mpp_create_group_update_r8_4d
+     module procedure mpp_create_group_update_r8_4dv
+#endif
   end interface mpp_create_group_update
 
   !> @ingroup mpp_domains_mod
@@ -1359,10 +1375,26 @@ module mpp_domains_mod
 
   !> @ingroup mpp_domains_mod
   interface mpp_reset_group_update_field
+#ifndef __NVCOMPILER
      module procedure mpp_reset_group_update_field_r4
      module procedure mpp_reset_group_update_field_r4_v
      module procedure mpp_reset_group_update_field_r8
      module procedure mpp_reset_group_update_field_r8_v
+!! rank specific interfaces are needed for NVHPC because it does not support deferred-rank arrays
+#else
+     module procedure mpp_reset_group_update_field_r4_2d
+     module procedure mpp_reset_group_update_field_r4_2dv
+     module procedure mpp_reset_group_update_field_r4_3d
+     module procedure mpp_reset_group_update_field_r4_3dv
+     module procedure mpp_reset_group_update_field_r4_4d
+     module procedure mpp_reset_group_update_field_r4_4dv
+     module procedure mpp_reset_group_update_field_r8_2d
+     module procedure mpp_reset_group_update_field_r8_2dv
+     module procedure mpp_reset_group_update_field_r8_3d
+     module procedure mpp_reset_group_update_field_r8_3dv
+     module procedure mpp_reset_group_update_field_r8_4d
+     module procedure mpp_reset_group_update_field_r8_4dv
+#endif
   end interface mpp_reset_group_update_field
 
   !> Pass the data from coarse grid to fill the buffer to be ready to be interpolated

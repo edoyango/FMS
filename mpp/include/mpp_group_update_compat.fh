@@ -1,0 +1,172 @@
+!***********************************************************************
+!*                             Apache License 2.0
+!*
+!* This file is part of the GFDL Flexible Modeling System (FMS).
+!*
+!* Licensed under the Apache License, Version 2.0 (the "License");
+!* you may not use this file except in compliance with the License.
+!* You may obtain a copy of the License at
+!*
+!*     http://www.apache.org/licenses/LICENSE-2.0
+!*
+!* FMS is distributed in the hope that it will be useful, but WITHOUT
+!* WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied;
+!* without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+!* PARTICULAR PURPOSE. See the License for the specific language
+!* governing permissions and limitations under the License.
+!***********************************************************************
+
+!> @addtogroup mpp_domains_mod
+!> @{
+
+!> @brief This file provides rank-specific versions of mpp_create_group_update and mpp_reset_group_update_field,
+!! for compilers that do not support deferred-rank (assumed-rank) arrays. NVHPC returns an incorrect address from
+!! c_loc when it is given an assumed-rank array, so the addresses that the assumed-rank routines store in the
+!! mpp_group_update_type would be invalid. Each routine here calls its assumed-rank counterpart and then replaces
+!! the stored address with the one obtained from the rank-specific array.
+
+!> Rank-2 version of the scalar @ref MPP_CREATE_GROUP_UPDATE_
+subroutine MPP_CREATE_GROUP_UPDATE_2D_(group, field, domain, flags, position, whalo, ehalo, shalo, nhalo, xdim, ydim)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(inout), target :: field(:,:)
+  type(domain2D), intent(inout) :: domain
+  integer, intent(in), optional :: flags, position
+  integer, intent(in), optional :: whalo, ehalo, shalo, nhalo
+  integer, intent(in), optional :: xdim, ydim
+
+  call MPP_CREATE_GROUP_UPDATE_(group, field, domain, flags, position, whalo, ehalo, shalo, nhalo, xdim, ydim)
+  group%addrs_s(group%nscalar) = c_loc(field)
+end subroutine MPP_CREATE_GROUP_UPDATE_2D_
+
+!> Rank-2 version of the vector @ref MPP_CREATE_GROUP_UPDATE_V_
+subroutine MPP_CREATE_GROUP_UPDATE_2DV_(group, fieldx, fieldy, domain, flags, gridtype, whalo, ehalo, shalo, nhalo, &
+                                           xdim, ydim)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(inout), target :: fieldx(:,:), fieldy(:,:)
+  type(domain2D), intent(inout) :: domain
+  integer, intent(in), optional :: flags, gridtype
+  integer, intent(in), optional :: whalo, ehalo, shalo, nhalo
+  integer, intent(in), optional :: xdim, ydim
+
+  call MPP_CREATE_GROUP_UPDATE_V_(group, fieldx, fieldy, domain, flags, gridtype, whalo, ehalo, shalo, nhalo, &
+                                  xdim, ydim)
+  group%addrs_x(group%nvector) = c_loc(fieldx)
+  group%addrs_y(group%nvector) = c_loc(fieldy)
+end subroutine MPP_CREATE_GROUP_UPDATE_2DV_
+
+!> Rank-2 version of the scalar @ref MPP_RESET_GROUP_UPDATE_FIELD_
+subroutine MPP_RESET_GROUP_UPDATE_FIELD_2D_(group, field)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(in), target :: field(:,:)
+
+  call MPP_RESET_GROUP_UPDATE_FIELD_(group, field)
+  group%addrs_s(group%reset_index_s) = c_loc(field)
+end subroutine MPP_RESET_GROUP_UPDATE_FIELD_2D_
+
+!> Rank-2 version of the vector @ref MPP_RESET_GROUP_UPDATE_FIELD_V_
+subroutine MPP_RESET_GROUP_UPDATE_FIELD_2DV_(group, fieldx, fieldy)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(in), target :: fieldx(:,:), fieldy(:,:)
+
+  call MPP_RESET_GROUP_UPDATE_FIELD_V_(group, fieldx, fieldy)
+  group%addrs_x(group%reset_index_v) = c_loc(fieldx)
+  group%addrs_y(group%reset_index_v) = c_loc(fieldy)
+end subroutine MPP_RESET_GROUP_UPDATE_FIELD_2DV_
+
+!> Rank-3 version of the scalar @ref MPP_CREATE_GROUP_UPDATE_
+subroutine MPP_CREATE_GROUP_UPDATE_3D_(group, field, domain, flags, position, whalo, ehalo, shalo, nhalo, xdim, ydim)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(inout), target :: field(:,:,:)
+  type(domain2D), intent(inout) :: domain
+  integer, intent(in), optional :: flags, position
+  integer, intent(in), optional :: whalo, ehalo, shalo, nhalo
+  integer, intent(in), optional :: xdim, ydim
+
+  call MPP_CREATE_GROUP_UPDATE_(group, field, domain, flags, position, whalo, ehalo, shalo, nhalo, xdim, ydim)
+  group%addrs_s(group%nscalar) = c_loc(field)
+end subroutine MPP_CREATE_GROUP_UPDATE_3D_
+
+!> Rank-3 version of the vector @ref MPP_CREATE_GROUP_UPDATE_V_
+subroutine MPP_CREATE_GROUP_UPDATE_3DV_(group, fieldx, fieldy, domain, flags, gridtype, whalo, ehalo, shalo, nhalo, &
+                                           xdim, ydim)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(inout), target :: fieldx(:,:,:), fieldy(:,:,:)
+  type(domain2D), intent(inout) :: domain
+  integer, intent(in), optional :: flags, gridtype
+  integer, intent(in), optional :: whalo, ehalo, shalo, nhalo
+  integer, intent(in), optional :: xdim, ydim
+
+  call MPP_CREATE_GROUP_UPDATE_V_(group, fieldx, fieldy, domain, flags, gridtype, whalo, ehalo, shalo, nhalo, &
+                                  xdim, ydim)
+  group%addrs_x(group%nvector) = c_loc(fieldx)
+  group%addrs_y(group%nvector) = c_loc(fieldy)
+end subroutine MPP_CREATE_GROUP_UPDATE_3DV_
+
+!> Rank-3 version of the scalar @ref MPP_RESET_GROUP_UPDATE_FIELD_
+subroutine MPP_RESET_GROUP_UPDATE_FIELD_3D_(group, field)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(in), target :: field(:,:,:)
+
+  call MPP_RESET_GROUP_UPDATE_FIELD_(group, field)
+  group%addrs_s(group%reset_index_s) = c_loc(field)
+end subroutine MPP_RESET_GROUP_UPDATE_FIELD_3D_
+
+!> Rank-3 version of the vector @ref MPP_RESET_GROUP_UPDATE_FIELD_V_
+subroutine MPP_RESET_GROUP_UPDATE_FIELD_3DV_(group, fieldx, fieldy)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(in), target :: fieldx(:,:,:), fieldy(:,:,:)
+
+  call MPP_RESET_GROUP_UPDATE_FIELD_V_(group, fieldx, fieldy)
+  group%addrs_x(group%reset_index_v) = c_loc(fieldx)
+  group%addrs_y(group%reset_index_v) = c_loc(fieldy)
+end subroutine MPP_RESET_GROUP_UPDATE_FIELD_3DV_
+
+!> Rank-4 version of the scalar @ref MPP_CREATE_GROUP_UPDATE_
+subroutine MPP_CREATE_GROUP_UPDATE_4D_(group, field, domain, flags, position, whalo, ehalo, shalo, nhalo, xdim, ydim)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(inout), target :: field(:,:,:,:)
+  type(domain2D), intent(inout) :: domain
+  integer, intent(in), optional :: flags, position
+  integer, intent(in), optional :: whalo, ehalo, shalo, nhalo
+  integer, intent(in), optional :: xdim, ydim
+
+  call MPP_CREATE_GROUP_UPDATE_(group, field, domain, flags, position, whalo, ehalo, shalo, nhalo, xdim, ydim)
+  group%addrs_s(group%nscalar) = c_loc(field)
+end subroutine MPP_CREATE_GROUP_UPDATE_4D_
+
+!> Rank-4 version of the vector @ref MPP_CREATE_GROUP_UPDATE_V_
+subroutine MPP_CREATE_GROUP_UPDATE_4DV_(group, fieldx, fieldy, domain, flags, gridtype, whalo, ehalo, shalo, nhalo, &
+                                           xdim, ydim)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(inout), target :: fieldx(:,:,:,:), fieldy(:,:,:,:)
+  type(domain2D), intent(inout) :: domain
+  integer, intent(in), optional :: flags, gridtype
+  integer, intent(in), optional :: whalo, ehalo, shalo, nhalo
+  integer, intent(in), optional :: xdim, ydim
+
+  call MPP_CREATE_GROUP_UPDATE_V_(group, fieldx, fieldy, domain, flags, gridtype, whalo, ehalo, shalo, nhalo, &
+                                  xdim, ydim)
+  group%addrs_x(group%nvector) = c_loc(fieldx)
+  group%addrs_y(group%nvector) = c_loc(fieldy)
+end subroutine MPP_CREATE_GROUP_UPDATE_4DV_
+
+!> Rank-4 version of the scalar @ref MPP_RESET_GROUP_UPDATE_FIELD_
+subroutine MPP_RESET_GROUP_UPDATE_FIELD_4D_(group, field)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(in), target :: field(:,:,:,:)
+
+  call MPP_RESET_GROUP_UPDATE_FIELD_(group, field)
+  group%addrs_s(group%reset_index_s) = c_loc(field)
+end subroutine MPP_RESET_GROUP_UPDATE_FIELD_4D_
+
+!> Rank-4 version of the vector @ref MPP_RESET_GROUP_UPDATE_FIELD_V_
+subroutine MPP_RESET_GROUP_UPDATE_FIELD_4DV_(group, fieldx, fieldy)
+  type(mpp_group_update_type), intent(inout) :: group
+  MPP_TYPE_, intent(in), target :: fieldx(:,:,:,:), fieldy(:,:,:,:)
+
+  call MPP_RESET_GROUP_UPDATE_FIELD_V_(group, fieldx, fieldy)
+  group%addrs_x(group%reset_index_v) = c_loc(fieldx)
+  group%addrs_y(group%reset_index_v) = c_loc(fieldy)
+end subroutine MPP_RESET_GROUP_UPDATE_FIELD_4DV_
+
+!> @}

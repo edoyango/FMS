@@ -1997,6 +1997,33 @@ end subroutine init_nonblock_type
 #undef FLIP_I_
 #define FLIP_I_ flip_i_r8
 #include <mpp_group_update.fh>
+#ifdef __NVCOMPILER
+#undef MPP_CREATE_GROUP_UPDATE_2D_
+#define MPP_CREATE_GROUP_UPDATE_2D_ mpp_create_group_update_r8_2d
+#undef MPP_CREATE_GROUP_UPDATE_2DV_
+#define MPP_CREATE_GROUP_UPDATE_2DV_ mpp_create_group_update_r8_2dv
+#undef MPP_RESET_GROUP_UPDATE_FIELD_2D_
+#define MPP_RESET_GROUP_UPDATE_FIELD_2D_ mpp_reset_group_update_field_r8_2d
+#undef MPP_RESET_GROUP_UPDATE_FIELD_2DV_
+#define MPP_RESET_GROUP_UPDATE_FIELD_2DV_ mpp_reset_group_update_field_r8_2dv
+#undef MPP_CREATE_GROUP_UPDATE_3D_
+#define MPP_CREATE_GROUP_UPDATE_3D_ mpp_create_group_update_r8_3d
+#undef MPP_CREATE_GROUP_UPDATE_3DV_
+#define MPP_CREATE_GROUP_UPDATE_3DV_ mpp_create_group_update_r8_3dv
+#undef MPP_RESET_GROUP_UPDATE_FIELD_3D_
+#define MPP_RESET_GROUP_UPDATE_FIELD_3D_ mpp_reset_group_update_field_r8_3d
+#undef MPP_RESET_GROUP_UPDATE_FIELD_3DV_
+#define MPP_RESET_GROUP_UPDATE_FIELD_3DV_ mpp_reset_group_update_field_r8_3dv
+#undef MPP_CREATE_GROUP_UPDATE_4D_
+#define MPP_CREATE_GROUP_UPDATE_4D_ mpp_create_group_update_r8_4d
+#undef MPP_CREATE_GROUP_UPDATE_4DV_
+#define MPP_CREATE_GROUP_UPDATE_4DV_ mpp_create_group_update_r8_4dv
+#undef MPP_RESET_GROUP_UPDATE_FIELD_4D_
+#define MPP_RESET_GROUP_UPDATE_FIELD_4D_ mpp_reset_group_update_field_r8_4d
+#undef MPP_RESET_GROUP_UPDATE_FIELD_4DV_
+#define MPP_RESET_GROUP_UPDATE_FIELD_4DV_ mpp_reset_group_update_field_r8_4dv
+#include <mpp_group_update_compat.fh>
+#endif
 
 #undef MPP_TYPE_
 #define MPP_TYPE_ real(r4_kind)
@@ -2031,3 +2058,30 @@ end subroutine init_nonblock_type
 #undef FLIP_I_
 #define FLIP_I_ flip_i_r4
 #include <mpp_group_update.fh>
+#ifdef __NVCOMPILER
+#undef MPP_CREATE_GROUP_UPDATE_2D_
+#define MPP_CREATE_GROUP_UPDATE_2D_ mpp_create_group_update_r4_2d
+#undef MPP_CREATE_GROUP_UPDATE_2DV_
+#define MPP_CREATE_GROUP_UPDATE_2DV_ mpp_create_group_update_r4_2dv
+#undef MPP_RESET_GROUP_UPDATE_FIELD_2D_
+#define MPP_RESET_GROUP_UPDATE_FIELD_2D_ mpp_reset_group_update_field_r4_2d
+#undef MPP_RESET_GROUP_UPDATE_FIELD_2DV_
+#define MPP_RESET_GROUP_UPDATE_FIELD_2DV_ mpp_reset_group_update_field_r4_2dv
+#undef MPP_CREATE_GROUP_UPDATE_3D_
+#define MPP_CREATE_GROUP_UPDATE_3D_ mpp_create_group_update_r4_3d
+#undef MPP_CREATE_GROUP_UPDATE_3DV_
+#define MPP_CREATE_GROUP_UPDATE_3DV_ mpp_create_group_update_r4_3dv
+#undef MPP_RESET_GROUP_UPDATE_FIELD_3D_
+#define MPP_RESET_GROUP_UPDATE_FIELD_3D_ mpp_reset_group_update_field_r4_3d
+#undef MPP_RESET_GROUP_UPDATE_FIELD_3DV_
+#define MPP_RESET_GROUP_UPDATE_FIELD_3DV_ mpp_reset_group_update_field_r4_3dv
+#undef MPP_CREATE_GROUP_UPDATE_4D_
+#define MPP_CREATE_GROUP_UPDATE_4D_ mpp_create_group_update_r4_4d
+#undef MPP_CREATE_GROUP_UPDATE_4DV_
+#define MPP_CREATE_GROUP_UPDATE_4DV_ mpp_create_group_update_r4_4dv
+#undef MPP_RESET_GROUP_UPDATE_FIELD_4D_
+#define MPP_RESET_GROUP_UPDATE_FIELD_4D_ mpp_reset_group_update_field_r4_4d
+#undef MPP_RESET_GROUP_UPDATE_FIELD_4DV_
+#define MPP_RESET_GROUP_UPDATE_FIELD_4DV_ mpp_reset_group_update_field_r4_4dv
+#include <mpp_group_update_compat.fh>
+#endif
