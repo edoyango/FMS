@@ -233,6 +233,8 @@ contains
     integer :: ix, iy, iz1, iz2 !< Indices of the domain-decomposed dimensions
     integer :: nd !< Number of dimensions
     integer :: i1, i2, i3, i4
+    integer :: i(4) !< Indices of the current element
+    integer :: idx !< Index into the buffer
     integer :: is0, js0
 
     select case (field_type)
@@ -308,49 +310,37 @@ contains
 
     select case (nd)
       case (2)
-        !$omp parallel do default(shared)
+        !$omp parallel do default(shared) private(i, idx)
         do i1=lb(1),ub(1)
           do i2=lb(2),ub(2)
-            block
-              integer :: i(2), idx
-
-              i = [i1, i2]
-              idx = n(ix)*(i(iy)-lb(iy)) + (i(ix)-lb(ix)) + 1
-              field2d(i1,i2) = buf(idx)
-            end block
+            i(1:2) = [i1, i2]
+            idx = n(ix)*(i(iy)-lb(iy)) + (i(ix)-lb(ix)) + 1
+            field2d(i1,i2) = buf(idx)
           end do
         end do
       case (3)
         iz1 = 1 + 2 + 3 - ix - iy
-        !$omp parallel do default(shared)
+        !$omp parallel do default(shared) private(i, idx)
         do i1=lb(1),ub(1)
           do i2=lb(2),ub(2)
             do i3=lb(3),ub(3)
-              block
-                integer :: i(3), idx
-
-                i = [i1, i2, i3]
-                idx = n(ix)*( n(iy)*(i(iz1)-1) + (i(iy)-lb(iy))) + (i(ix)-lb(ix)) + 1
-                field3d(i1,i2,i3) = buf(idx)
-              end block
+              i(1:3) = [i1, i2, i3]
+              idx = n(ix)*( n(iy)*(i(iz1)-1) + (i(iy)-lb(iy))) + (i(ix)-lb(ix)) + 1
+              field3d(i1,i2,i3) = buf(idx)
             end do
           end do
         end do
       case (4)
         iz1 = trailz(sum(2**[1,2,3,4]) - 2**ix - 2**iy)
         iz2 = 1 + 2 + 3 + 4 - ix - iy - iz1
-        !$omp parallel do default(shared)
+        !$omp parallel do default(shared) private(i, idx)
         do i1=lb(1),ub(1)
           do i2=lb(2),ub(2)
             do i3=lb(3),ub(3)
               do i4=lb(4),ub(4)
-                block
-                  integer :: i(4), idx
-
-                  i = [i1, i2, i3, i4]
-                  idx = n(ix)*( n(iy)*( n(iz1)*(i(iz2)-1) + (i(iz1)-1)) + (i(iy)-lb(iy))) + (i(ix)-lb(ix)) + 1
-                  field4d(i1,i2,i3,i4) = buf(idx)
-                end block
+                i(1:4) = [i1, i2, i3, i4]
+                idx = n(ix)*( n(iy)*( n(iz1)*(i(iz2)-1) + (i(iz1)-1)) + (i(iy)-lb(iy))) + (i(ix)-lb(ix)) + 1
+                field4d(i1,i2,i3,i4) = buf(idx)
               end do
             end do
           end do
