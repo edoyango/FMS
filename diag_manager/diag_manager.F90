@@ -1810,11 +1810,14 @@ END FUNCTION register_static_field
        TYPE IS (real(kind=r4_kind))
           WHERE ( rmask < 0.5_r4_kind ) oor_mask = .FALSE.
           rmask_threshold = 0.5_r4_kind
-          rmask_ptr_r4  => rmask
+          ! Bounds remapping gives the pointer lower bounds of 1, as an assumed-shape dummy should have.
+          ! nvfortran keeps the actual argument's lower bounds for polymorphic dummies, so rmask itself
+          ! may not start at 1.
+          rmask_ptr_r4(1:,1:,1:) => rmask
        TYPE IS (real(kind=r8_kind))
           WHERE ( rmask < 0.5_r8_kind ) oor_mask = .FALSE.
           rmask_threshold = 0.5_r8_kind
-          rmask_ptr_r8 => rmask
+          rmask_ptr_r8(1:,1:,1:) => rmask
        CLASS DEFAULT
           CALL error_mesg ('diag_manager_mod::send_data_3d',&
                & 'The rmask is not one of the supported types of real(kind=4) or real(kind=8)', FATAL)
@@ -3403,7 +3406,7 @@ END FUNCTION register_static_field
                             & j <= l_end(2)+hj ) THEN
                             i1 = i-l_start(1)-hi+1
                             j1 =  j-l_start(2)-hj+1
-                            IF ( rmask(i-is+1+hi,j-js+1+hj,k) < 0.5_r4_kind ) &
+                            IF ( rmask_ptr_r4(i-is+1+hi,j-js+1+hj,k) < 0.5_r4_kind ) &
                                  & output_fields(out_num)%buffer(i1,j1,k1,sample) = missvalue
                          END IF
                       END DO
@@ -3418,7 +3421,7 @@ END FUNCTION register_static_field
                             & j <= l_end(2)+hj ) THEN
                             i1 = i-l_start(1)-hi+1
                             j1 =  j-l_start(2)-hj+1
-                            IF ( rmask(i-is+1+hi,j-js+1+hj,k) < 0.5_r8_kind ) &
+                            IF ( rmask_ptr_r8(i-is+1+hi,j-js+1+hj,k) < 0.5_r8_kind ) &
                                  & output_fields(out_num)%buffer(i1,j1,k1,sample) = missvalue
                          END IF
                       END DO
@@ -3437,7 +3440,7 @@ END FUNCTION register_static_field
                    k1 = k - ksr + 1
                    DO j=js, je
                       DO i=is, ie
-                         IF ( rmask(i-is+1+hi,j-js+1+hj,k) < 0.5_r4_kind ) &
+                         IF ( rmask_ptr_r4(i-is+1+hi,j-js+1+hj,k) < 0.5_r4_kind ) &
                               & output_fields(out_num)%buffer(i-hi,j-hj,k1,sample)= missvalue
                       END DO
                    END DO
@@ -3447,7 +3450,7 @@ END FUNCTION register_static_field
                    k1 = k - ksr + 1
                    DO j=js, je
                       DO i=is, ie
-                         IF ( rmask(i-is+1+hi,j-js+1+hj,k) < 0.5_r8_kind ) &
+                         IF ( rmask_ptr_r8(i-is+1+hi,j-js+1+hj,k) < 0.5_r8_kind ) &
                               & output_fields(out_num)%buffer(i-hi,j-hj,k1,sample)= missvalue
                       END DO
                    END DO
@@ -3462,7 +3465,7 @@ END FUNCTION register_static_field
                 DO k=ks, ke
                    DO j=js, je
                       DO i=is, ie
-                         IF ( rmask(i-is+1+hi,j-js+1+hj,k) < 0.5_r4_kind ) &
+                         IF ( rmask_ptr_r4(i-is+1+hi,j-js+1+hj,k) < 0.5_r4_kind ) &
                               & output_fields(out_num)%buffer(i-hi,j-hj,k,sample)= missvalue
                       END DO
                    END DO
@@ -3471,7 +3474,7 @@ END FUNCTION register_static_field
                 DO k=ks, ke
                    DO j=js, je
                       DO i=is, ie
-                         IF ( rmask(i-is+1+hi,j-js+1+hj,k) < 0.5_r8_kind ) &
+                         IF ( rmask_ptr_r8(i-is+1+hi,j-js+1+hj,k) < 0.5_r8_kind ) &
                               & output_fields(out_num)%buffer(i-hi,j-hj,k,sample)= missvalue
                       END DO
                    END DO
