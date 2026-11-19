@@ -509,7 +509,10 @@ subroutine write_buffer_wrapper_netcdf(this, fms2io_fileobj, unlim_dim_level, is
                                                        !! reductions so buffer data can be remapped
   character(len=:), allocatable :: varname !< name of the variable
   logical :: using_diurnal !< local copy of is_diurnal if present
-  class(*), allocatable                        :: buff_ptr(:,:,:,:,:) !< pointer for buffer to write
+  class(*), allocatable, target                :: buff_ptr(:,:,:,:,:) !< pointer for buffer to write
+  class(*), pointer :: p1(:), p2(:,:), p3(:,:,:), p4(:,:,:,:) !< Sections of buff_ptr to write. They are passed
+      !! as pointers because nvfortran mangles a section of a CLASS(*) array passed directly to a CLASS(*) dummy:
+      !! with ':' the dummy gets lower bounds of 0, and with explicit bounds its data are not copied in.
 
   using_diurnal = .false.
   if( present(is_diurnal) ) using_diurnal = is_diurnal
@@ -524,15 +527,19 @@ subroutine write_buffer_wrapper_netcdf(this, fms2io_fileobj, unlim_dim_level, is
   case (0)
     call write_data(fms2io_fileobj, varname, buff_ptr(1,1,1,1,1), unlim_dim_level=unlim_dim_level)
   case (1)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,1,1,1,1), unlim_dim_level=unlim_dim_level)
+    p1 => buff_ptr(:,1,1,1,1)
+    call write_data(fms2io_fileobj, varname, p1, unlim_dim_level=unlim_dim_level)
   case (2)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,1,1,1), unlim_dim_level=unlim_dim_level)
+    p2 => buff_ptr(:,:,1,1,1)
+    call write_data(fms2io_fileobj, varname, p2, unlim_dim_level=unlim_dim_level)
   case (3)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,1,1), unlim_dim_level=unlim_dim_level)
+    p3 => buff_ptr(:,:,:,1,1)
+    call write_data(fms2io_fileobj, varname, p3, unlim_dim_level=unlim_dim_level)
   case (4)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,:,1), unlim_dim_level=unlim_dim_level)
+    p4 => buff_ptr(:,:,:,:,1)
+    call write_data(fms2io_fileobj, varname, p4, unlim_dim_level=unlim_dim_level)
   case (5)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,:,:), unlim_dim_level=unlim_dim_level)
+    call write_data(fms2io_fileobj, varname, buff_ptr, unlim_dim_level=unlim_dim_level)
   end select
 end subroutine write_buffer_wrapper_netcdf
 
@@ -546,7 +553,10 @@ subroutine write_buffer_wrapper_domain(this, fms2io_fileobj, unlim_dim_level, is
 
   character(len=:), allocatable :: varname !< name of the variable
   logical :: using_diurnal !< local copy of is_diurnal if present
-  class(*), allocatable                        :: buff_ptr(:,:,:,:,:) !< pointer to buffer to write
+  class(*), allocatable, target                :: buff_ptr(:,:,:,:,:) !< pointer to buffer to write
+  class(*), pointer :: p1(:), p2(:,:), p3(:,:,:), p4(:,:,:,:) !< Sections of buff_ptr to write. They are passed
+      !! as pointers because nvfortran mangles a section of a CLASS(*) array passed directly to a CLASS(*) dummy:
+      !! with ':' the dummy gets lower bounds of 0, and with explicit bounds its data are not copied in.
 
   using_diurnal = .false.
   if( present(is_diurnal) ) using_diurnal = is_diurnal
@@ -561,15 +571,19 @@ subroutine write_buffer_wrapper_domain(this, fms2io_fileobj, unlim_dim_level, is
   case (0)
     call write_data(fms2io_fileobj, varname, buff_ptr(1,1,1,1,1), unlim_dim_level=unlim_dim_level)
   case (1)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,1,1,1,1), unlim_dim_level=unlim_dim_level)
+    p1 => buff_ptr(:,1,1,1,1)
+    call write_data(fms2io_fileobj, varname, p1, unlim_dim_level=unlim_dim_level)
   case (2)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,1,1,1), unlim_dim_level=unlim_dim_level)
+    p2 => buff_ptr(:,:,1,1,1)
+    call write_data(fms2io_fileobj, varname, p2, unlim_dim_level=unlim_dim_level)
   case (3)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,1,1), unlim_dim_level=unlim_dim_level)
+    p3 => buff_ptr(:,:,:,1,1)
+    call write_data(fms2io_fileobj, varname, p3, unlim_dim_level=unlim_dim_level)
   case (4)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,:,1), unlim_dim_level=unlim_dim_level)
+    p4 => buff_ptr(:,:,:,:,1)
+    call write_data(fms2io_fileobj, varname, p4, unlim_dim_level=unlim_dim_level)
   case (5)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,:,:), unlim_dim_level=unlim_dim_level)
+    call write_data(fms2io_fileobj, varname, buff_ptr, unlim_dim_level=unlim_dim_level)
   end select
 end subroutine write_buffer_wrapper_domain
 
@@ -583,7 +597,10 @@ subroutine write_buffer_wrapper_u(this, fms2io_fileobj, unlim_dim_level, is_diur
 
   character(len=:), allocatable :: varname !< name of the variable
   logical :: using_diurnal !< local copy of is_diurnal if present
-  class(*), allocatable                        :: buff_ptr(:,:,:,:,:) !< pointer for buffer to write
+  class(*), allocatable, target                :: buff_ptr(:,:,:,:,:) !< pointer for buffer to write
+  class(*), pointer :: p1(:), p2(:,:), p3(:,:,:), p4(:,:,:,:) !< Sections of buff_ptr to write. They are passed
+      !! as pointers because nvfortran mangles a section of a CLASS(*) array passed directly to a CLASS(*) dummy:
+      !! with ':' the dummy gets lower bounds of 0, and with explicit bounds its data are not copied in.
 
   using_diurnal = .false.
   if( present(is_diurnal) ) using_diurnal = is_diurnal
@@ -598,15 +615,19 @@ subroutine write_buffer_wrapper_u(this, fms2io_fileobj, unlim_dim_level, is_diur
   case (0)
     call write_data(fms2io_fileobj, varname, buff_ptr(1,1,1,1,1), unlim_dim_level=unlim_dim_level)
   case (1)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,1,1,1,1), unlim_dim_level=unlim_dim_level)
+    p1 => buff_ptr(:,1,1,1,1)
+    call write_data(fms2io_fileobj, varname, p1, unlim_dim_level=unlim_dim_level)
   case (2)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,1,1,1), unlim_dim_level=unlim_dim_level)
+    p2 => buff_ptr(:,:,1,1,1)
+    call write_data(fms2io_fileobj, varname, p2, unlim_dim_level=unlim_dim_level)
   case (3)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,1,1), unlim_dim_level=unlim_dim_level)
+    p3 => buff_ptr(:,:,:,1,1)
+    call write_data(fms2io_fileobj, varname, p3, unlim_dim_level=unlim_dim_level)
   case (4)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,:,1), unlim_dim_level=unlim_dim_level)
+    p4 => buff_ptr(:,:,:,:,1)
+    call write_data(fms2io_fileobj, varname, p4, unlim_dim_level=unlim_dim_level)
   case (5)
-    call write_data(fms2io_fileobj, varname, buff_ptr(:,:,:,:,:), unlim_dim_level=unlim_dim_level)
+    call write_data(fms2io_fileobj, varname, buff_ptr, unlim_dim_level=unlim_dim_level)
   end select
 end subroutine write_buffer_wrapper_u
 
