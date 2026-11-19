@@ -16,22 +16,26 @@
 !* governing permissions and limitations under the License.
 !***********************************************************************
 
-!> @brief Tests send_data with on_device=.true. in the old diag_manager.
+!> @brief Tests send_data with on_device=.true. in the old and the modern diag_manager.
 !!
 !! The fields are computed on the OpenMP device. With on_device = .true. in test_diag_on_device_nml they
 !! are posted from the device; otherwise they are copied back and posted from the host.
 !! test_diag_on_device.sh runs both and checks that the output files are identical. The fields cover
 !! 3-d and 2-d data with halos, an r4 field without halos, rmask (including one passed through a
 !! pointer whose lower bound is 0), values equal to the missing value, fields without a missing value,
-!! weighted time means, time maxima and minima, instantaneous values, and a static field. Four more fields are
-!! computed and kept on the host only, with host-only masks (an rmask or a logical mask, 2-d and 3-d). They are
-!! posted with the same on_device, so that send_data has to copy them to the device for the post.
+!! weighted time means, instantaneous values, and a static field. test_modern_diag_on_device.sh runs it
+!! with the modern diag_manager, which does not accept missing values in unmasked time averages: it sets
+!! f4_missing = .false., and checks with u2_missing = .true. that such data fail in both paths.
+!! Four more fields are computed and kept on the host only, with host-only masks (an rmask or a logical mask,
+!! 2-d and 3-d). They are posted with the same on_device, so that send_data has to copy them to the device for the
+!! post. The files also have time maxima and minima.
 program test_diag_on_device
   use fms_mod,          only: fms_init, fms_end, check_nml_error
   use mpp_mod,          only: input_nml_file
-  use mpp_domains_mod,  only: domain2d, mpp_define_domains, mpp_get_compute_domain, mpp_get_data_domain
+  use mpp_domains_mod,  only: domain2d, mpp_define_domains, mpp_get_compute_domain, mpp_get_data_domain, &
+                              mpp_define_io_domain
   use diag_manager_mod, only: diag_manager_init, diag_manager_end, diag_axis_init, register_diag_field, &
-                              register_static_field, send_data, diag_manager_set_time_end
+                              register_static_field, send_data, diag_manager_set_time_end, diag_send_complete
   use time_manager_mod, only: time_type, set_calendar_type, set_date, set_time, JULIAN, operator(+)
   use platform_mod,     only: r4_kind, r8_kind
 
@@ -73,9 +77,11 @@ program test_diag_on_device
   real(r8_kind) :: x(nx), y(ny), z(nz) !< Axis data
   logical :: used             !< Return value of send_data
   logical :: on_device = .false. !< If true, post from the device
+  logical :: f4_missing = .true.  !< If true, some f4 values equal the missing value
+  logical :: u2_missing = .false. !< If true, one u2 value equals the missing value
   integer :: i, j, k, n, io, ierr
 
-  namelist /test_diag_on_device_nml/ on_device
+  namelist /test_diag_on_device_nml/ on_device, f4_missing, u2_missing
 
   call fms_init
   read (input_nml_file, test_diag_on_device_nml, iostat=io)
@@ -84,6 +90,7 @@ program test_diag_on_device
   call diag_manager_init
 
   call mpp_define_domains((/1, nx, 1, ny/), (/1, 1/), Domain, xhalo=halo, yhalo=halo, name='test')
+  call mpp_define_io_domain(Domain, (/1, 1/)) ! The modern diag_manager needs an io_domain
   call mpp_get_compute_domain(Domain, isc, iec, jsc, jec)
   call mpp_get_data_domain(Domain, isd, ied, jsd, jed)
 
@@ -160,12 +167,13 @@ program test_diag_on_device
     do j = jsd, jed ; do i = isd, ied
       t2(i,j) = real(n, r8_kind) / 7.0_r8_kind + real(i*j, r8_kind)
       u2(i,j) = real(mod(i + j + n, 5), r8_kind) * 0.1_r8_kind
+      if (u2_missing .and. (n == nsteps/2) .and. (i == isc+3) .and. (j == jsc+3)) u2(i,j) = missing
     enddo ; enddo
     !$omp target teams distribute parallel do collapse(3)
     do k = 1, nz ; do j = jsc, jec ; do i = isc, iec
       f4(i,j,k) = real(i + j + k + n, r4_kind) / 9.0_r4_kind
       ! Some points are missing at some times
-      if (mod(i + j + n, 7) == 0) f4(i,j,k) = real(missing, r4_kind)
+      if (f4_missing .and. (mod(i + j + n, 7) == 0)) f4(i,j,k) = real(missing, r4_kind)
     enddo ; enddo ; enddo
     if (.not.on_device) then
       !$omp target update from(t3, u3, t2, u2, f4)
@@ -200,6 +208,7 @@ program test_diag_on_device
                      je_in=jec-jsd+1, ke_in=nz, mask=lmask3, weight=weight, on_device=on_device)
     used = send_data(id_l2, l2, Time, is_in=isc-isd+1, ie_in=iec-isd+1, js_in=jsc-jsd+1, je_in=jec-jsd+1, &
                      mask=lmask2, weight=weight, on_device=on_device)
+    call diag_send_complete(Time_step) ! Needed by the modern diag_manager; it does nothing here for the old one
   enddo
 
   call diag_manager_end(Time)
