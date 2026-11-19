@@ -1528,7 +1528,7 @@ pure logical function has_var_outname (this)
       has_var_outname = .false.
     endif
   else
-    has_var_outname = .true.
+    has_var_outname = .false.
   endif
 end function has_var_outname
 !> @brief Checks if diag_file_obj%var_longname is allocated
