@@ -2215,6 +2215,11 @@ END SUBROUTINE check_bounds_are_exact_dynamic
        IF ( output_fields(i)%local_output .AND. .NOT. output_fields(i)%need_compute) CYCLE
        ! only output static fields here
        IF ( .NOT.output_fields(i)%static ) CYCLE
+       ! A field posted from the device has its current buffer there.
+       IF ( output_fields(i)%buffer_on_device .AND. .NOT.output_fields(i)%buffer_host_current ) THEN
+          !$omp target update from(output_fields(i)%buffer)
+          output_fields(i)%buffer_host_current = .TRUE.
+       END IF
        CALL diag_data_out(file, i, output_fields(i)%buffer, files(file)%last_flush, .TRUE., .TRUE.)
     END DO
 !! New FMS_IO close

@@ -274,6 +274,8 @@ use platform_mod
 #include<file_version.h>
 
   type(time_type) :: Time_end
+  LOGICAL :: device_posts = .FALSE. !< True if OpenMP target regions run on a device. Otherwise send_data
+                                    !! ignores on_device, as the host holds the data and runs the target regions.
 
   !> @brief Send data over to output fields.
   !!
@@ -368,6 +370,19 @@ use platform_mod
      MODULE PROCEDURE diag_field_add_attribute_1d
      MODULE PROCEDURE diag_field_add_attribute_0d
   END INTERFACE diag_field_add_attribute
+
+  !> Make the data of a send_data argument available on the OpenMP device for the post: copied there if it is not,
+  !! and used as it is if it is.
+  INTERFACE device_map
+     MODULE PROCEDURE device_map_r4_2d, device_map_r8_2d, device_map_logical_2d
+     MODULE PROCEDURE device_map_r4_3d, device_map_r8_3d, device_map_logical_3d
+  END INTERFACE device_map
+
+  !> Undo device_map. The device copy is dropped only if device_map made it.
+  INTERFACE device_unmap
+     MODULE PROCEDURE device_unmap_r4_2d, device_unmap_r8_2d, device_unmap_logical_2d
+     MODULE PROCEDURE device_unmap_r4_3d, device_unmap_r8_3d, device_unmap_logical_3d
+  END INTERFACE device_unmap
 
 !> @addtogroup diag_manager_mod
 !> @{
@@ -1575,41 +1590,75 @@ END FUNCTION register_static_field
 
   !> @return true if send is successful
   LOGICAL FUNCTION send_data_2d(diag_field_id, field, time, is_in, js_in, &
-       & mask, rmask, ie_in, je_in, weight, err_msg)
+       & mask, rmask, ie_in, je_in, weight, err_msg, on_device)
     INTEGER, INTENT(in) :: diag_field_id
-    CLASS(*), INTENT(in), DIMENSION(:,:) :: field
+    CLASS(*), INTENT(in), DIMENSION(:,:), TARGET :: field
     CLASS(*), INTENT(in), OPTIONAL :: weight
     TYPE (time_type), INTENT(in), OPTIONAL :: time
     INTEGER, INTENT(in), OPTIONAL :: is_in, js_in, ie_in, je_in
     LOGICAL, INTENT(in), DIMENSION(:,:), OPTIONAL :: mask
-    CLASS(*), INTENT(in), DIMENSION(:,:),OPTIONAL :: rmask
+    CLASS(*), INTENT(in), DIMENSION(:,:),OPTIONAL, TARGET :: rmask
     CHARACTER(len=*), INTENT(out), OPTIONAL :: err_msg
+    LOGICAL, INTENT(in), OPTIONAL :: on_device !< If true, the output buffers are updated on the OpenMP device
+                                               !! from field, mask and rmask, which must be contiguous. An array
+                                               !! that is on the device is used as it is, so its device copy
+                                               !! must be current. An array that is not is copied there for
+                                               !! the post. The default is false. It is ignored if OpenMP
+                                               !! target regions run on the host.
 
     CLASS(*), ALLOCATABLE :: field_out(:,:,:) !< Local copy of field
     LOGICAL, DIMENSION(SIZE(field,1),SIZE(field,2),1) ::  mask_out !< Local copy of mask
+    REAL(kind=r4_kind), POINTER :: field_r4(:,:), rmask_r4(:,:) !< field or rmask with lower bounds of 1
+    REAL(kind=r8_kind), POINTER :: field_r8(:,:), rmask_r8(:,:) !< field or rmask with lower bounds of 1
+    LOGICAL :: dev_post !< True if the data were posted from the device
+    INTEGER :: i, j, n1, n2
 
     ! If diag_field_id is < 0 it means that this field is not registered, simply return
     IF ( diag_field_id <= 0 ) THEN
        send_data_2d = .FALSE.
        RETURN
     END IF
+    dev_post = .FALSE.
+    IF ( PRESENT(on_device) ) dev_post = on_device .AND. device_posts
+    n1 = SIZE(field,1)
+    n2 = SIZE(field,2)
 
-    ! First copy the data to a three d array with last element 1
+    ! First copy the data to a three d array with last element 1. For a post from the device, the copies of the
+    ! data and the mask are made on the device. Bounds remapping gives the pointers lower bounds of 1, which
+    ! nvfortran does not give polymorphic dummies.
     SELECT TYPE (field)
     TYPE IS (real(kind=r4_kind))
-       allocate(real(r4_kind) :: field_out(SIZE(field,1),SIZE(field,2),1))
+       allocate(real(r4_kind) :: field_out(n1,n2,1))
        select type(field_out)
          type is (real(r4_kind))
-           field_out(:, :, 1) = field
+           IF ( dev_post ) CALL device_alloc_r4_3d(field_out)
+           field_r4(1:,1:) => field
+           IF ( dev_post ) CALL device_map(field_r4)
+           !$omp target teams loop collapse(2) if(dev_post)
+           DO j = 1, n2
+              DO i = 1, n1
+                 field_out(i,j,1) = field_r4(i,j)
+              END DO
+           END DO
+           IF ( dev_post ) CALL device_unmap(field_r4)
          class default
            call error_mesg('diag_manager_mod::send_data_2d', &
                & 'Error allocating field out as real(r4_kind)', FATAL)
        end select
     TYPE IS (real(kind=r8_kind))
-       allocate(real(r8_kind) :: field_out(SIZE(field,1),SIZE(field,2),1))
+       allocate(real(r8_kind) :: field_out(n1,n2,1))
        select type(field_out)
          type is (real(r8_kind))
-           field_out(:, :, 1) = field
+           IF ( dev_post ) CALL device_alloc_r8_3d(field_out)
+           field_r8(1:,1:) => field
+           IF ( dev_post ) CALL device_map(field_r8)
+           !$omp target teams loop collapse(2) if(dev_post)
+           DO j = 1, n2
+              DO i = 1, n1
+                 field_out(i,j,1) = field_r8(i,j)
+              END DO
+           END DO
+           IF ( dev_post ) CALL device_unmap(field_r8)
          class default
            call error_mesg('diag_manager_mod::send_data_2d', &
                & 'Error allocating field out as real(r8_kind)', FATAL)
@@ -1620,18 +1669,47 @@ END FUNCTION register_static_field
     END SELECT
 
     ! Default values for mask
+    IF ( dev_post ) CALL device_alloc_logical_3d(mask_out)
     IF ( PRESENT(mask) ) THEN
-       mask_out(:, :, 1) = mask
+       IF ( dev_post ) CALL device_map(mask)
+       !$omp target teams loop collapse(2) if(dev_post)
+       DO j = 1, n2
+          DO i = 1, n1
+             mask_out(i,j,1) = mask(i,j)
+          END DO
+       END DO
+       IF ( dev_post ) CALL device_unmap(mask)
     ELSE
-       mask_out = .TRUE.
+       !$omp target teams loop collapse(2) if(dev_post)
+       DO j = 1, n2
+          DO i = 1, n1
+             mask_out(i,j,1) = .TRUE.
+          END DO
+       END DO
     END IF
 
     IF ( PRESENT(rmask) ) THEN
        SELECT TYPE (rmask)
        TYPE IS (real(kind=r4_kind))
-          WHERE ( rmask < 0.5_r4_kind ) mask_out(:, :, 1) = .FALSE.
+          rmask_r4(1:,1:) => rmask
+          IF ( dev_post ) CALL device_map(rmask_r4)
+          !$omp target teams loop collapse(2) if(dev_post)
+          DO j = 1, n2
+             DO i = 1, n1
+                IF ( rmask_r4(i,j) < 0.5_r4_kind ) mask_out(i,j,1) = .FALSE.
+             END DO
+          END DO
+          IF ( dev_post ) CALL device_unmap(rmask_r4)
        TYPE IS (real(kind=r8_kind))
-          WHERE ( rmask < 0.5_r8_kind ) mask_out(:, :, 1) = .FALSE.
+          rmask_r8(1:,1:) => rmask
+          IF ( dev_post ) CALL device_map(rmask_r8)
+          !$omp target teams loop collapse(2) if(dev_post)
+          DO j = 1, n2
+             DO i = 1, n1
+                IF ( rmask_r8(i,j) < 0.5_r8_kind ) mask_out(i,j,1) = .FALSE.
+             END DO
+          END DO
+          IF ( dev_post ) CALL device_unmap(rmask_r8)
        CLASS DEFAULT
           CALL error_mesg ('diag_manager_mod::send_data_2d',&
                & 'The rmask is not one of the supported types of real(kind=4) or real(kind=8)', FATAL)
@@ -1640,45 +1718,118 @@ END FUNCTION register_static_field
 
     IF ( PRESENT(mask) .OR. PRESENT(rmask) ) THEN
        send_data_2d = diag_send_data(diag_field_id, field_out, time, is_in=is_in, js_in=js_in, ks_in=1,&
-            & mask=mask_out, ie_in=ie_in, je_in=je_in, ke_in=1, weight=weight, err_msg=err_msg)
+            & mask=mask_out, ie_in=ie_in, je_in=je_in, ke_in=1, weight=weight, err_msg=err_msg, on_device=dev_post)
     ELSE
        send_data_2d = diag_send_data(diag_field_id, field_out, time, is_in=is_in, js_in=js_in, ks_in=1,&
-            & ie_in=ie_in, je_in=je_in, ke_in=1, weight=weight, err_msg=err_msg)
+            & ie_in=ie_in, je_in=je_in, ke_in=1, weight=weight, err_msg=err_msg, on_device=dev_post)
+    END IF
+
+    IF ( dev_post ) THEN
+       SELECT TYPE (field_out)
+       TYPE IS (real(kind=r4_kind))
+          CALL device_delete_r4_3d(field_out)
+       TYPE IS (real(kind=r8_kind))
+          CALL device_delete_r8_3d(field_out)
+       END SELECT
+       CALL device_delete_logical_3d(mask_out)
     END IF
   END FUNCTION send_data_2d
 
   !> @return true if send is successful
   LOGICAL FUNCTION send_data_3d(diag_field_id, field, time, is_in, js_in, ks_in, &
-             & mask, rmask, ie_in, je_in, ke_in, weight, err_msg)
+             & mask, rmask, ie_in, je_in, ke_in, weight, err_msg, on_device)
     INTEGER, INTENT(in) :: diag_field_id
-    CLASS(*), DIMENSION(:,:,:), INTENT(in) :: field
+    CLASS(*), DIMENSION(:,:,:), INTENT(in), TARGET :: field
     CLASS(*), INTENT(in), OPTIONAL :: weight
     TYPE (time_type), INTENT(in), OPTIONAL :: time
     INTEGER, INTENT(in), OPTIONAL :: is_in, js_in, ks_in,ie_in,je_in, ke_in
     LOGICAL, DIMENSION(:,:,:), INTENT(in), OPTIONAL :: mask
-    CLASS(*), DIMENSION(:,:,:), INTENT(in), OPTIONAL :: rmask
+    CLASS(*), DIMENSION(:,:,:), INTENT(in), OPTIONAL, TARGET :: rmask
     CHARACTER(len=*), INTENT(out), OPTIONAL :: err_msg
+    LOGICAL, INTENT(in), OPTIONAL :: on_device !< If true, the output buffers are updated on the OpenMP device
+                                               !! from field, mask and rmask, which must be contiguous. An array
+                                               !! that is on the device is used as it is, so its device copy
+                                               !! must be current. An array that is not is copied there for
+                                               !! the post. The default is false. It is ignored if OpenMP
+                                               !! target regions run on the host.
+
+    REAL(kind=r4_kind), POINTER :: field_r4(:,:,:), rmask_r4(:,:,:) !< field or rmask with lower bounds of 1
+    REAL(kind=r8_kind), POINTER :: field_r8(:,:,:), rmask_r8(:,:,:) !< field or rmask with lower bounds of 1
+    LOGICAL :: dev_post  !< True if the data were posted from the device
+    LOGICAL :: dev_mask  !< True if the post is from the device and a logical mask was passed
+    LOGICAL :: dev_rmask !< True if the post is from the device and an rmask was passed
+
+    ! diag_send_data reads field, mask and rmask in target regions. Copy them to the device for the whole post
+    ! if they are not there.
+    dev_post = .FALSE. ; dev_mask = .FALSE. ; dev_rmask = .FALSE.
+    IF ( PRESENT(on_device) ) THEN
+       dev_post = on_device .AND. device_posts
+       dev_mask = dev_post .AND. PRESENT(mask)
+       dev_rmask = dev_post .AND. PRESENT(rmask)
+    END IF
+    IF ( dev_post ) THEN
+       SELECT TYPE (field)
+       TYPE IS (real(kind=r4_kind))
+          field_r4(1:,1:,1:) => field
+          CALL device_map(field_r4)
+       TYPE IS (real(kind=r8_kind))
+          field_r8(1:,1:,1:) => field
+          CALL device_map(field_r8)
+       END SELECT
+    END IF
+    IF ( dev_mask ) CALL device_map(mask)
+    IF ( dev_rmask ) THEN
+       SELECT TYPE (rmask)
+       TYPE IS (real(kind=r4_kind))
+          rmask_r4(1:,1:,1:) => rmask
+          CALL device_map(rmask_r4)
+       TYPE IS (real(kind=r8_kind))
+          rmask_r8(1:,1:,1:) => rmask
+          CALL device_map(rmask_r8)
+       END SELECT
+    END IF
 
     if (present(mask) .and. present(rmask)) then
       send_data_3d = diag_send_data(diag_field_id, field, time=time, is_in=is_in, js_in=js_in, ks_in=ks_in, &
                                mask=mask, rmask=rmask, ie_in=ie_in, je_in=je_in, ke_in=ke_in, weight=weight, &
-                               err_msg=err_msg)
+                               err_msg=err_msg, on_device=on_device)
     elseif (present(rmask)) then
       send_data_3d = diag_send_data(diag_field_id, field, time=time, is_in=is_in, js_in=js_in, ks_in=ks_in, &
-                               rmask=rmask, ie_in=ie_in, je_in=je_in, ke_in=ke_in, weight=weight, err_msg=err_msg)
+                               rmask=rmask, ie_in=ie_in, je_in=je_in, ke_in=ke_in, weight=weight, err_msg=err_msg, &
+                               on_device=on_device)
     elseif (present(mask)) then
       send_data_3d = diag_send_data(diag_field_id, field, time=time, is_in=is_in, js_in=js_in, ks_in=ks_in, &
-                               mask=mask, ie_in=ie_in, je_in=je_in, ke_in=ke_in, weight=weight, err_msg=err_msg)
+                               mask=mask, ie_in=ie_in, je_in=je_in, ke_in=ke_in, weight=weight, err_msg=err_msg, &
+                               on_device=on_device)
     else
       send_data_3d = diag_send_data(diag_field_id, field, time=time, is_in=is_in, js_in=js_in, ks_in=ks_in, &
-                               ie_in=ie_in, je_in=je_in, ke_in=ke_in, weight=weight, err_msg=err_msg)
+                               ie_in=ie_in, je_in=je_in, ke_in=ke_in, weight=weight, err_msg=err_msg, &
+                               on_device=on_device)
     endif
+
+    IF ( dev_post ) THEN
+       SELECT TYPE (field)
+       TYPE IS (real(kind=r4_kind))
+          CALL device_unmap(field_r4)
+       TYPE IS (real(kind=r8_kind))
+          CALL device_unmap(field_r8)
+       END SELECT
+    END IF
+    IF ( dev_mask ) CALL device_unmap(mask)
+    IF ( dev_rmask ) THEN
+       SELECT TYPE (rmask)
+       TYPE IS (real(kind=r4_kind))
+          CALL device_unmap(rmask_r4)
+       TYPE IS (real(kind=r8_kind))
+          CALL device_unmap(rmask_r8)
+       END SELECT
+    END IF
   END FUNCTION send_data_3d
 
   !> @return true if send is successful
 !TODO documentation, separate the old and new
   LOGICAL FUNCTION diag_send_data(diag_field_id, field, time, is_in, js_in, ks_in, &
-             & mask, rmask, ie_in, je_in, ke_in, weight, err_msg)
+             & mask, rmask, ie_in, je_in, ke_in, weight, err_msg, on_device)
     INTEGER, INTENT(in) :: diag_field_id
     CLASS(*), DIMENSION(:,:,:), INTENT(in),TARGET :: field
     CLASS(*), INTENT(in), OPTIONAL :: weight
@@ -1687,6 +1838,12 @@ END FUNCTION register_static_field
     LOGICAL, DIMENSION(:,:,:), INTENT(in), OPTIONAL, target :: mask
     CLASS(*), DIMENSION(:,:,:), INTENT(in), OPTIONAL, target :: rmask
     CHARACTER(len=*), INTENT(out), OPTIONAL :: err_msg
+    LOGICAL, INTENT(in), OPTIONAL :: on_device !< If true, the output buffers are updated on the OpenMP device
+                                               !! from field, mask and rmask, which must be contiguous. An array
+                                               !! that is on the device is used as it is, so its device copy
+                                               !! must be current. An array that is not is copied there for
+                                               !! the post. The default is false. It is ignored if OpenMP
+                                               !! target regions run on the host.
 
     REAL :: weight1
     REAL :: missvalue
@@ -1725,6 +1882,11 @@ END FUNCTION register_static_field
     class(*), allocatable, dimension(:,:,:,:) :: rmask_remap !< 4d remapped array
     REAL(kind=r4_kind), POINTER, DIMENSION(:,:,:) :: rmask_ptr_r4 !< A pointer to r4 type of rmask
     REAL(kind=r8_kind), POINTER, DIMENSION(:,:,:) :: rmask_ptr_r8 !<A pointer to r8 type of rmask
+    REAL(kind=r4_kind), POINTER, DIMENSION(:,:,:) :: field_ptr_r4 !< field with lower bounds of 1, if r4
+    REAL(kind=r8_kind), POINTER, DIMENSION(:,:,:) :: field_ptr_r8 !< field with lower bounds of 1, if r8
+    LOGICAL :: any_found !< True if a value of the post counts towards count_0d
+    LOGICAL :: dev_post !< True if the data were posted from the device
+    CHARACTER(len=128) :: reason !< Why a post from the device is not supported
 
     TYPE(fmsDiagOutfieldIndex_type), ALLOCATABLE:: ofield_index_cfg !<Instance used in calling math functions.
     TYPE(fmsDiagOutfield_type), ALLOCATABLE:: ofield_cfg !<Instance  used in calling math functions.
@@ -1756,18 +1918,45 @@ END FUNCTION register_static_field
 !!$       first_send_data_call = .FALSE.
 !!$    END IF
 
-    ! First copy the data to a three d array
+    dev_post = .FALSE.
+    IF ( PRESENT(on_device) ) dev_post = on_device .AND. device_posts
+    IF ( dev_post .AND. use_modern_diag ) CALL error_mesg('diag_manager_mod::send_data', &
+         & 'on_device=.true. is not supported by the modern diag manager', FATAL)
+
+    ! First copy the data to a three d array. For a post from the device, the copies of the data and the masks
+    ! are made on the device.
+    n1 = SIZE(field, 1)
+    n2 = SIZE(field, 2)
+    n3 = SIZE(field, 3)
     ALLOCATE(field_out(SIZE(field,1),SIZE(field,2),SIZE(field,3)), STAT=status)
     IF ( status .NE. 0 ) THEN
        WRITE (err_msg_local, FMT='("Unable to allocate field_out(",I5,",",I5,",",I5,"). (STAT: ",I5,")")')&
             & SIZE(field,1), SIZE(field,2), SIZE(field,3), status
        IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) RETURN
     END IF
+    IF ( dev_post ) CALL device_alloc_real_3d(field_out)
     SELECT TYPE (field)
     TYPE IS (real(kind=r4_kind))
-       field_out = field
+       ! Bounds remapping gives the pointer lower bounds of 1 (see rmask_ptr_r4 below).
+       field_ptr_r4(1:,1:,1:) => field
+       !$omp target teams loop collapse(3) if(dev_post)
+       DO k = 1, n3
+          DO j = 1, n2
+             DO i = 1, n1
+                field_out(i,j,k) = field_ptr_r4(i,j,k)
+             END DO
+          END DO
+       END DO
     TYPE IS (real(kind=r8_kind))
-       field_out = real(field)
+       field_ptr_r8(1:,1:,1:) => field
+       !$omp target teams loop collapse(3) if(dev_post)
+       DO k = 1, n3
+          DO j = 1, n2
+             DO i = 1, n1
+                field_out(i,j,k) = real(field_ptr_r8(i,j,k))
+             END DO
+          END DO
+       END DO
     CLASS DEFAULT
        CALL error_mesg ('diag_manager_mod::send_data_3d',&
             & 'The field is not one of the supported types (real(kind=4) or real(kind=8)). '//&
@@ -1797,10 +1986,26 @@ END FUNCTION register_static_field
        IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) RETURN
     END IF
 
+    IF ( dev_post ) CALL device_alloc_logical_3d(oor_mask)
+
     IF ( PRESENT(mask) ) THEN
-       oor_mask = mask
+       !$omp target teams loop collapse(3) if(dev_post)
+       DO k = 1, n3
+          DO j = 1, n2
+             DO i = 1, n1
+                oor_mask(i,j,k) = mask(i,j,k)
+             END DO
+          END DO
+       END DO
     ELSE
-       oor_mask = .TRUE.
+       !$omp target teams loop collapse(3) if(dev_post)
+       DO k = 1, n3
+          DO j = 1, n2
+             DO i = 1, n1
+                oor_mask(i,j,k) = .TRUE.
+             END DO
+          END DO
+       END DO
     END IF
 
     rmask_ptr_r4  => null()
@@ -1808,16 +2013,30 @@ END FUNCTION register_static_field
     IF ( PRESENT(rmask) ) THEN
        SELECT TYPE (rmask)
        TYPE IS (real(kind=r4_kind))
-          WHERE ( rmask < 0.5_r4_kind ) oor_mask = .FALSE.
           rmask_threshold = 0.5_r4_kind
           ! Bounds remapping gives the pointer lower bounds of 1, as an assumed-shape dummy should have.
           ! nvfortran keeps the actual argument's lower bounds for polymorphic dummies, so rmask itself
           ! may not start at 1.
           rmask_ptr_r4(1:,1:,1:) => rmask
+          !$omp target teams loop collapse(3) if(dev_post)
+          DO k = 1, n3
+             DO j = 1, n2
+                DO i = 1, n1
+                   IF ( rmask_ptr_r4(i,j,k) < 0.5_r4_kind ) oor_mask(i,j,k) = .FALSE.
+                END DO
+             END DO
+          END DO
        TYPE IS (real(kind=r8_kind))
-          WHERE ( rmask < 0.5_r8_kind ) oor_mask = .FALSE.
           rmask_threshold = 0.5_r8_kind
           rmask_ptr_r8(1:,1:,1:) => rmask
+          !$omp target teams loop collapse(3) if(dev_post)
+          DO k = 1, n3
+             DO j = 1, n2
+                DO i = 1, n1
+                   IF ( rmask_ptr_r8(i,j,k) < 0.5_r8_kind ) oor_mask(i,j,k) = .FALSE.
+                END DO
+             END DO
+          END DO
        CLASS DEFAULT
           CALL error_mesg ('diag_manager_mod::send_data_3d',&
                & 'The rmask is not one of the supported types of real(kind=4) or real(kind=8)', FATAL)
@@ -1838,6 +2057,7 @@ END FUNCTION register_static_field
     IF ( PRESENT(ie_in) ) THEN
        IF ( .NOT.PRESENT(is_in) ) THEN
           IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'ie_in present without is_in', err_msg) ) THEN
+             IF ( dev_post ) CALL device_release(field_out, oor_mask)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1846,6 +2066,7 @@ END FUNCTION register_static_field
        IF ( PRESENT(js_in) .AND. .NOT.PRESENT(je_in) ) THEN
           IF ( fms_error_handler('diag_manager_modsend_data_3d',&
                & 'is_in and ie_in present, but js_in present without je_in', err_msg) ) THEN
+             IF ( dev_post ) CALL device_release(field_out, oor_mask)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1855,6 +2076,7 @@ END FUNCTION register_static_field
     IF ( PRESENT(je_in) ) THEN
        IF ( .NOT.PRESENT(js_in) ) THEN
           IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'je_in present without js_in', err_msg) ) THEN
+             IF ( dev_post ) CALL device_release(field_out, oor_mask)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1863,6 +2085,7 @@ END FUNCTION register_static_field
        IF ( PRESENT(is_in) .AND. .NOT.PRESENT(ie_in) ) THEN
           IF ( fms_error_handler('diag_manager_mod::send_data_3d',&
                & 'js_in and je_in present, but is_in present without ie_in', err_msg)) THEN
+             IF ( dev_post ) CALL device_release(field_out, oor_mask)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -1890,6 +2113,7 @@ END FUNCTION register_static_field
     IF ( MOD(twohi,2) /= 0 ) THEN
        IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'non-symmetric halos in first dimension', &
           & err_msg) ) THEN
+          IF ( dev_post ) CALL device_release(field_out, oor_mask)
           DEALLOCATE(field_out)
           DEALLOCATE(oor_mask)
           RETURN
@@ -1899,6 +2123,7 @@ END FUNCTION register_static_field
     IF ( MOD(twohj,2) /= 0 ) THEN
        IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'non-symmetric halos in second dimension', &
           & err_msg) ) THEN
+          IF ( dev_post ) CALL device_release(field_out, oor_mask)
           DEALLOCATE(field_out)
           DEALLOCATE(oor_mask)
           RETURN
@@ -2041,6 +2266,23 @@ END FUNCTION register_static_field
           output_fields(out_num)%phys_window = .FALSE.
        END IF
        phys_window = output_fields(out_num)%phys_window
+       ! The buffers of a field posted from the device live on the device: its first post copies the buffer there,
+       ! and from then on the device copy holds the current values. count_0d stays on the host.
+       IF ( dev_post ) THEN
+          reason = device_post_unsupported(diag_field_id, out_num, PRESENT(mask), numthreads, active_omp_level)
+          IF ( LEN_TRIM(reason) > 0 ) CALL error_mesg('diag_manager_mod::send_data', 'module/output_field '//&
+               & TRIM(input_fields(diag_field_id)%module_name)//'/'//TRIM(output_fields(out_num)%output_name)//&
+               & ' cannot be posted from the device: '//TRIM(reason), FATAL)
+          IF ( .NOT.output_fields(out_num)%buffer_on_device ) THEN
+             !$omp target enter data map(to: output_fields(out_num)%buffer)
+             output_fields(out_num)%buffer_on_device = .TRUE.
+          END IF
+          output_fields(out_num)%buffer_host_current = .FALSE.
+       ELSE IF ( output_fields(out_num)%buffer_on_device ) THEN
+          CALL error_mesg('diag_manager_mod::send_data', 'module/output_field '//&
+               & TRIM(input_fields(diag_field_id)%module_name)//'/'//TRIM(output_fields(out_num)%output_name)//&
+               & ' has been posted from the device, so it must always be posted with on_device=.true.', FATAL)
+       END IF
        IF ( need_compute ) THEN
           l_start = output_fields(out_num)%output_grid%l_start_indx
           l_end = output_fields(out_num)%output_grid%l_end_indx
@@ -2095,6 +2337,7 @@ END FUNCTION register_static_field
                 & TRIM(output_fields(out_num)%output_name)
              IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                 & ', time must be present when output frequency = EVERY_TIME', err_msg)) THEN
+                IF ( dev_post ) CALL device_release(field_out, oor_mask)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -2107,6 +2350,7 @@ END FUNCTION register_static_field
                & TRIM(output_fields(out_num)%output_name)
           IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                & ', time must be present for nonstatic field', err_msg)) THEN
+             IF ( dev_post ) CALL device_release(field_out, oor_mask)
              DEALLOCATE(field_out)
              DEALLOCATE(oor_mask)
              RETURN
@@ -2127,6 +2371,7 @@ END FUNCTION register_static_field
                            & TRIM(output_fields(out_num)%output_name)
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//&
                            & TRIM(error_string)//' is skipped one time level in output data', err_msg)) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -2139,6 +2384,7 @@ END FUNCTION register_static_field
                    IF ( mpp_pe() .EQ. mpp_root_pe() ) THEN
                       IF(fms_error_handler('diag_manager_mod::send_data_3d','module/output_field '//TRIM(error_string)&
                            & //', write EMPTY buffer', err_msg)) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -2159,6 +2405,7 @@ END FUNCTION register_static_field
           CALL check_bounds_are_exact_dynamic(out_num, diag_field_id, Time, err_msg=err_msg_local)
           IF ( err_msg_local /= '' ) THEN
              IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                IF ( dev_post ) CALL device_release(field_out, oor_mask)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -2186,6 +2433,7 @@ END FUNCTION register_static_field
             IF (mf_result .eqv. .FALSE.) THEN
               DEALLOCATE(ofield_index_cfg)
               DEALLOCATE(ofield_cfg)
+               IF ( dev_post ) CALL device_release(field_out, oor_mask)
                DEALLOCATE(field_out)
                DEALLOCATE(oor_mask)
                RETURN
@@ -2198,6 +2446,7 @@ END FUNCTION register_static_field
             IF (mf_result .eqv. .FALSE.) THEN
               DEALLOCATE(ofield_index_cfg)
               DEALLOCATE(ofield_cfg)
+               IF ( dev_post ) CALL device_release(field_out, oor_mask)
                DEALLOCATE(field_out)
                DEALLOCATE(oor_mask)
                RETURN
@@ -2208,6 +2457,7 @@ END FUNCTION register_static_field
           CALL check_bounds_are_exact_static(out_num, diag_field_id, err_msg=err_msg_local)
           IF ( err_msg_local /= '' ) THEN
               IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg)) THEN
+                IF ( dev_post ) CALL device_release(field_out, oor_mask)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -2254,6 +2504,7 @@ END FUNCTION register_static_field
                      & TRIM(output_fields(out_num)%output_name)
                 IF ( fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                      & ', regional output NOT supported with mask_variant', err_msg)) THEN
+                   IF ( dev_post ) CALL device_release(field_out, oor_mask)
                    DEALLOCATE(field_out)
                    DEALLOCATE(oor_mask)
                    RETURN
@@ -2269,6 +2520,7 @@ END FUNCTION register_static_field
                       CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                       IF ( err_msg_local /= '' ) THEN
                          IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                            IF ( dev_post ) CALL device_release(field_out, oor_mask)
                             DEALLOCATE(field_out)
                             DEALLOCATE(oor_mask)
                             RETURN
@@ -2370,6 +2622,7 @@ END FUNCTION register_static_field
                         & TRIM(output_fields(out_num)%output_name)
                    IF(fms_error_handler('diag_manager_mod::send_data_3d', 'module/output_field '//TRIM(error_string)//&
                         & ', variable mask but no missing value defined', err_msg)) THEN
+                      IF ( dev_post ) CALL device_release(field_out, oor_mask)
                       DEALLOCATE(field_out)
                       DEALLOCATE(oor_mask)
                       RETURN
@@ -2381,6 +2634,7 @@ END FUNCTION register_static_field
                      & TRIM(output_fields(out_num)%output_name)
                 IF(fms_error_handler('diag_manager_mod::send_data_3d','module/output_field '//TRIM(error_string)//&
                      & ', variable mask but no mask given', err_msg)) THEN
+                   IF ( dev_post ) CALL device_release(field_out, oor_mask)
                    DEALLOCATE(field_out)
                    DEALLOCATE(oor_mask)
                    RETURN
@@ -2508,6 +2762,7 @@ END FUNCTION register_static_field
                          CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                          IF ( err_msg_local /= '' ) THEN
                             IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                               IF ( dev_post ) CALL device_release(field_out, oor_mask)
                                DEALLOCATE(field_out)
                                DEALLOCATE(oor_mask)
                                RETURN
@@ -2535,39 +2790,63 @@ END FUNCTION register_static_field
                             END DO
                          END DO
                       ELSE
-!$OMP CRITICAL
+! nvfortran 26.9 compiles a target teams loop inside OMP CRITICAL into a sequential kernel
+!!$OMP CRITICAL
+                         ASSOCIATE (buf => output_fields(out_num)%buffer)
+                         !$omp target teams loop collapse(3) if(dev_post)
                          DO k=ks, ke
                             DO j=js, je
                                DO i=is, ie
                                   IF ( mask(i-is+1+hi,j-js+1+hj,k) ) THEN
                                      IF ( pow_value /= 1 ) THEN
-                                        output_fields(out_num)%buffer(i-hi,j-hj,k,sample) =&
-                                             & output_fields(out_num)%buffer(i-hi,j-hj,k,sample) +&
+                                        buf(i-hi,j-hj,k,sample) =&
+                                             & buf(i-hi,j-hj,k,sample) +&
                                              & (field_out(i-is+1+hi,j-js+1+hj,k) * weight1)**(pow_value)
                                      ELSE
-                                        output_fields(out_num)%buffer(i-hi,j-hj,k,sample) =&
-                                             & output_fields(out_num)%buffer(i-hi,j-hj,k,sample) +&
+                                        buf(i-hi,j-hj,k,sample) =&
+                                             & buf(i-hi,j-hj,k,sample) +&
                                              & field_out(i-is+1+hi,j-js+1+hj,k) * weight1
                                      END IF
                                   ELSE
-                                     output_fields(out_num)%buffer(i-hi,j-hj,k,sample)= missvalue
+                                     buf(i-hi,j-hj,k,sample)= missvalue
                                   END IF
                                END DO
                             END DO
                          END DO
-!$OMP END CRITICAL
+                         END ASSOCIATE
+!!$OMP END CRITICAL
                       END IF
                    END IF
-!$OMP CRITICAL
+! nvfortran 26.9 compiles a target teams loop inside OMP CRITICAL into a sequential kernel
+!!$OMP CRITICAL
                    IF ( need_compute .AND. .NOT.phys_window ) THEN
                       IF ( ANY(mask(l_start(1)+hi:l_end(1)+hi,l_start(2)+hj:l_end(2)+hj,l_start(3):l_end(3))) ) &
                            & output_fields(out_num)%count_0d(sample) =&
                            & output_fields(out_num)%count_0d(sample) + weight1
                    ELSE
-                      IF ( ANY(mask(f1:f2,f3:f4,ks:ke)) ) output_fields(out_num)%count_0d(sample) =&
+                      ! Count this post if any value counts (as ANY() would), in a loop that can run on the device
+                      any_found = .FALSE.
+                      ! nvfortran 26.9: the host fallback of a reduction loop copies the scalar to and from
+                      ! the device, which loses the host result. Map it by hand and copy it back only
+                      ! if the loop ran on the device.
+                      !$omp target enter data map(to: any_found)
+                      !$omp target teams loop collapse(3) reduction(.or.:any_found) if(dev_post)
+                      DO k=ks, ke
+                         DO j=f3, f4
+                            DO i=f1, f2
+                               IF ( mask(i,j,k) ) any_found = .TRUE.
+                            END DO
+                         END DO
+                      END DO
+                      IF (dev_post) THEN
+                        !$omp target exit data map(from: any_found)
+                      ELSE
+                        !$omp target exit data map(release: any_found)
+                      END IF
+                      IF ( any_found ) output_fields(out_num)%count_0d(sample) =&
                            & output_fields(out_num)%count_0d(sample)+weight1
                    END IF
-!$OMP END CRITICAL
+!!$OMP END CRITICAL
 
                 ELSE ! missing value NOT present
                    IF (   (.NOT.ALL(mask(f1:f2,f3:f4,ks:ke)) .AND. mpp_pe() .EQ. mpp_root_pe()).AND.&
@@ -2670,6 +2949,7 @@ END FUNCTION register_static_field
                          CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                          IF ( err_msg_local /= '') THEN
                             IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                               IF ( dev_post ) CALL device_release(field_out, oor_mask)
                                DEALLOCATE(field_out)
                                DEALLOCATE(oor_mask)
                                RETURN
@@ -2857,6 +3137,7 @@ END FUNCTION register_static_field
                          CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                          IF ( err_msg_local /= '' ) THEN
                             IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                               IF ( dev_post ) CALL device_release(field_out, oor_mask)
                                DEALLOCATE(field_out)
                                DEALLOCATE(oor_mask)
                                RETURN
@@ -2884,41 +3165,56 @@ END FUNCTION register_static_field
                             END DO
                          END DO
                       ELSE
-!$OMP CRITICAL
+! nvfortran 26.9 compiles a target teams loop inside OMP CRITICAL into a sequential kernel
+!!$OMP CRITICAL
+                         ASSOCIATE (buf => output_fields(out_num)%buffer)
+                         !$omp target teams loop collapse(3) if(dev_post)
                          DO k=ks, ke
                             DO j=js, je
                                DO i=is, ie
                                   IF ( field_out(i-is+1+hi,j-js+1+hj,k) /= missvalue )  THEN
                                      IF ( pow_value /= 1 ) THEN
-                                        output_fields(out_num)%buffer(i-hi,j-hj,k,sample) =&
-                                             & output_fields(out_num)%buffer(i-hi,j-hj,k,sample) +&
+                                        buf(i-hi,j-hj,k,sample) =&
+                                             & buf(i-hi,j-hj,k,sample) +&
                                              & (field_out(i-is+1+hi,j-js+1+hj,k) * weight1)**(pow_value)
                                      ELSE
-                                        output_fields(out_num)%buffer(i-hi,j-hj,k,sample) =&
-                                             & output_fields(out_num)%buffer(i-hi,j-hj,k,sample) +&
+                                        buf(i-hi,j-hj,k,sample) =&
+                                             & buf(i-hi,j-hj,k,sample) +&
                                              & field_out(i-is+1+hi,j-js+1+hj,k) * weight1
                                      END IF
                                   ELSE
-                                     output_fields(out_num)%buffer(i-hi,j-hj,k,sample) = missvalue
+                                     buf(i-hi,j-hj,k,sample) = missvalue
                                   END IF
                                END DO
                             END DO
                          END DO
-!$OMP END CRITICAL
+                         END ASSOCIATE
+!!$OMP END CRITICAL
                       END IF
-!$OMP CRITICAL
-                      outer1: DO k=ks, ke
+! nvfortran 26.9 compiles a target teams loop inside OMP CRITICAL into a sequential kernel
+!!$OMP CRITICAL
+                      ! Count this post if any value counts (as ANY() would), in a loop that can run on the device
+                      any_found = .FALSE.
+                      ! nvfortran 26.9: the host fallback of a reduction loop copies the scalar to and from
+                      ! the device, which loses the host result. Map it by hand and copy it back only
+                      ! if the loop ran on the device.
+                      !$omp target enter data map(to: any_found)
+                      !$omp target teams loop collapse(3) reduction(.or.:any_found) if(dev_post)
+                      DO k=ks, ke
                          DO j=f3, f4
                             DO i=f1, f2
-                               IF ( field_out(i,j,k) /= missvalue ) THEN
-                                  output_fields(out_num)%count_0d(sample) = output_fields(out_num)%count_0d(sample) &
-                                                                          & + weight1
-                                  EXIT outer1
-                               END IF
+                               IF ( field_out(i,j,k) /= missvalue ) any_found = .TRUE.
                             END DO
                          END DO
-                      END DO outer1
-!$OMP END CRITICAL
+                      END DO
+                      IF (dev_post) THEN
+                        !$omp target exit data map(from: any_found)
+                      ELSE
+                        !$omp target exit data map(release: any_found)
+                      END IF
+                      IF ( any_found ) output_fields(out_num)%count_0d(sample) =&
+                           & output_fields(out_num)%count_0d(sample)+weight1
+!!$OMP END CRITICAL
                    END IF
                 ELSE ! no missing value defined, No mask
                    IF ( need_compute ) THEN
@@ -3008,6 +3304,7 @@ END FUNCTION register_static_field
                          CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                          IF ( err_msg_local /= '' ) THEN
                             IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                               IF ( dev_post ) CALL device_release(field_out, oor_mask)
                                DEALLOCATE(field_out)
                                DEALLOCATE(oor_mask)
                                RETURN
@@ -3025,17 +3322,25 @@ END FUNCTION register_static_field
                                  & field_out(f1:f2,f3:f4,ks:ke)*weight1
                          END IF
                       ELSE
-!$OMP CRITICAL
-                         IF ( pow_value /= 1 ) THEN
-                            output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) =&
-                                 & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) +&
-                                 & (field_out(f1:f2,f3:f4,ks:ke)*weight1)**(pow_value)
-                         ELSE
-                            output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) =&
-                                 & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) +&
-                                 & field_out(f1:f2,f3:f4,ks:ke)*weight1
-                         END IF
-!$OMP END CRITICAL
+! nvfortran 26.9 compiles a target teams loop inside OMP CRITICAL into a sequential kernel
+!!$OMP CRITICAL
+                         ASSOCIATE (buf => output_fields(out_num)%buffer)
+                         !$omp target teams loop collapse(3) if(dev_post)
+                         DO k=ks, ke
+                            DO j=js, je
+                               DO i=is, ie
+                                  IF ( pow_value /= 1 ) THEN
+                                     buf(i-hi,j-hj,k,sample) = buf(i-hi,j-hj,k,sample) +&
+                                          & (field_out(i-is+1+hi,j-js+1+hj,k)*weight1)**(pow_value)
+                                  ELSE
+                                     buf(i-hi,j-hj,k,sample) = buf(i-hi,j-hj,k,sample) +&
+                                          & field_out(i-is+1+hi,j-js+1+hj,k)*weight1
+                                  END IF
+                               END DO
+                            END DO
+                         END DO
+                         END ASSOCIATE
+!!$OMP END CRITICAL
                       END IF
                    END IF
 !$OMP CRITICAL
@@ -3086,15 +3391,25 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
                       END IF
                    END IF
                 END IF
-                WHERE ( mask(f1:f2,f3:f4,ks:ke) .AND. field_out(f1:f2,f3:f4,ks:ke)>&
-                      & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) )&
-                   & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) = field_out(f1:f2,f3:f4,ks:ke)
+                ASSOCIATE (buf => output_fields(out_num)%buffer)
+                !$omp target teams loop collapse(3) if(dev_post)
+                DO k = ks, ke
+                   DO j = js, je
+                      DO i = is, ie
+                         IF ( mask(i-is+1+hi,j-js+1+hj,k) .AND. field_out(i-is+1+hi,j-js+1+hj,k) >&
+                            & buf(i-hi,j-hj,k,sample) ) &
+                            & buf(i-hi,j-hj,k,sample) = field_out(i-is+1+hi,j-js+1+hj,k)
+                      END DO
+                   END DO
+                END DO
+                END ASSOCIATE
              END IF
           ELSE
              IF ( need_compute ) THEN
@@ -3126,15 +3441,25 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
                       END IF
                    END IF
                 END IF
-                WHERE ( field_out(f1:f2,f3:f4,ks:ke) >&
-                      & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) ) &
-                   & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) = field_out(f1:f2,f3:f4,ks:ke)
+                ASSOCIATE (buf => output_fields(out_num)%buffer)
+                !$omp target teams loop collapse(3) if(dev_post)
+                DO k = ks, ke
+                   DO j = js, je
+                      DO i = is, ie
+                         IF ( field_out(i-is+1+hi,j-js+1+hj,k) >&
+                            & buf(i-hi,j-hj,k,sample) ) &
+                            & buf(i-hi,j-hj,k,sample) = field_out(i-is+1+hi,j-js+1+hj,k)
+                      END DO
+                   END DO
+                END DO
+                END ASSOCIATE
              END IF
           END IF
           output_fields(out_num)%count_0d(sample) = 1
@@ -3170,15 +3495,25 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
                       END IF
                    END IF
                 END IF
-                WHERE ( mask(f1:f2,f3:f4,ks:ke) .AND. field_out(f1:f2,f3:f4,ks:ke) <&
-                      & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) ) &
-                   & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) = field_out(f1:f2,f3:f4,ks:ke)
+                ASSOCIATE (buf => output_fields(out_num)%buffer)
+                !$omp target teams loop collapse(3) if(dev_post)
+                DO k = ks, ke
+                   DO j = js, je
+                      DO i = is, ie
+                         IF ( mask(i-is+1+hi,j-js+1+hj,k) .AND. field_out(i-is+1+hi,j-js+1+hj,k) <&
+                            & buf(i-hi,j-hj,k,sample) ) &
+                            & buf(i-hi,j-hj,k,sample) = field_out(i-is+1+hi,j-js+1+hj,k)
+                      END DO
+                   END DO
+                END DO
+                END ASSOCIATE
              END IF
           ELSE
              IF ( need_compute ) THEN
@@ -3210,15 +3545,25 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
                       END IF
                    END IF
                 END IF
-                WHERE ( field_out(f1:f2,f3:f4,ks:ke) <&
-                      & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) )&
-                   & output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) = field_out(f1:f2,f3:f4,ks:ke)
+                ASSOCIATE (buf => output_fields(out_num)%buffer)
+                !$omp target teams loop collapse(3) if(dev_post)
+                DO k = ks, ke
+                   DO j = js, je
+                      DO i = is, ie
+                         IF ( field_out(i-is+1+hi,j-js+1+hj,k) <&
+                            & buf(i-hi,j-hj,k,sample) ) &
+                            & buf(i-hi,j-hj,k,sample) = field_out(i-is+1+hi,j-js+1+hj,k)
+                      END DO
+                   END DO
+                END DO
+                END ASSOCIATE
              END IF
           END IF
           output_fields(out_num)%count_0d(sample) = 1
@@ -3255,6 +3600,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3294,6 +3640,7 @@ END FUNCTION register_static_field
                    CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                    IF ( err_msg_local /= '' ) THEN
                       IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                         IF ( dev_post ) CALL device_release(field_out, oor_mask)
                          DEALLOCATE(field_out)
                          DEALLOCATE(oor_mask)
                          RETURN
@@ -3330,13 +3677,23 @@ END FUNCTION register_static_field
                 CALL check_out_of_bounds(out_num, diag_field_id, err_msg=err_msg_local)
                 IF ( err_msg_local /= '' ) THEN
                    IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg) ) THEN
+                      IF ( dev_post ) CALL device_release(field_out, oor_mask)
                       DEALLOCATE(field_out)
                       DEALLOCATE(oor_mask)
                       RETURN
                    END IF
                 END IF
              END IF
-             output_fields(out_num)%buffer(is-hi:ie-hi,js-hj:je-hj,ks:ke,sample) = field_out(f1:f2,f3:f4,ks:ke)
+             ASSOCIATE (buf => output_fields(out_num)%buffer)
+             !$omp target teams loop collapse(3) if(dev_post)
+             DO k=ks, ke
+                DO j=js, je
+                   DO i=is, ie
+                      buf(i-hi,j-hj,k,sample) = field_out(i-is+1+hi,j-js+1+hj,k)
+                   END DO
+                END DO
+             END DO
+             END ASSOCIATE
           END IF
 
           IF ( PRESENT(mask) .AND. missvalue_present ) THEN
@@ -3368,14 +3725,17 @@ END FUNCTION register_static_field
                    END DO
                 END DO
              ELSE
+                ASSOCIATE (buf => output_fields(out_num)%buffer)
+                !$omp target teams loop collapse(3) if(dev_post)
                 DO k=ks, ke
                    DO j=js, je
                       DO i=is, ie
                          IF ( .NOT.mask(i-is+1+hi,j-js+1+hj,k) )&
-                              & output_fields(out_num)%buffer(i-hi,j-hj,k,sample)= missvalue
+                              & buf(i-hi,j-hj,k,sample)= missvalue
                       END DO
                    END DO
                 END DO
+                END ASSOCIATE
              END IF
           END IF
        END IF !average
@@ -3384,6 +3744,7 @@ END FUNCTION register_static_field
           CALL check_bounds_are_exact_static(out_num, diag_field_id, err_msg=err_msg_local)
           IF ( err_msg_local /= '' ) THEN
              IF ( fms_error_handler('diag_manager_mod::send_data_3d', err_msg_local, err_msg)) THEN
+                IF ( dev_post ) CALL device_release(field_out, oor_mask)
                 DEALLOCATE(field_out)
                 DEALLOCATE(oor_mask)
                 RETURN
@@ -3460,22 +3821,25 @@ END FUNCTION register_static_field
                      & 'The rmask is not one of the supported types of real(kind=4) or real(kind=8)', FATAL)
              END SELECT
           ELSE
+             ASSOCIATE (buf => output_fields(out_num)%buffer)
              SELECT TYPE (rmask)
              TYPE IS (real(kind=r4_kind))
+                !$omp target teams loop collapse(3) if(dev_post)
                 DO k=ks, ke
                    DO j=js, je
                       DO i=is, ie
                          IF ( rmask_ptr_r4(i-is+1+hi,j-js+1+hj,k) < 0.5_r4_kind ) &
-                              & output_fields(out_num)%buffer(i-hi,j-hj,k,sample)= missvalue
+                              & buf(i-hi,j-hj,k,sample)= missvalue
                       END DO
                    END DO
                 END DO
              TYPE IS (real(kind=r8_kind))
+                !$omp target teams loop collapse(3) if(dev_post)
                 DO k=ks, ke
                    DO j=js, je
                       DO i=is, ie
                          IF ( rmask_ptr_r8(i-is+1+hi,j-js+1+hj,k) < 0.5_r8_kind ) &
-                              & output_fields(out_num)%buffer(i-hi,j-hj,k,sample)= missvalue
+                              & buf(i-hi,j-hj,k,sample)= missvalue
                       END DO
                    END DO
                 END DO
@@ -3483,15 +3847,187 @@ END FUNCTION register_static_field
                 CALL error_mesg ('diag_manager_mod::send_data_3d',&
                      & 'The rmask is not one of the supported types of real(kind=4) or real(kind=8)', FATAL)
              END SELECT
+             END ASSOCIATE
           END IF
        END IF
 
     END DO num_out_fields
 
+    IF ( dev_post ) CALL device_release(field_out, oor_mask)
     DEALLOCATE(field_out)
     DEALLOCATE(oor_mask)
   endIF modern_if
   END FUNCTION diag_send_data
+
+  !> @brief Why an output field cannot be updated from a send_data post from the OpenMP device, or '' if it can.
+  !! Posts from the device cover time averages, time maxima and minima and instantaneous values over the full
+  !! field, with an rmask or a logical mask and missing value, from one thread.
+  FUNCTION device_post_unsupported(diag_field_id, out_num, mask_present, numthreads, active_omp_level) &
+       & RESULT(reason)
+    INTEGER, INTENT(in) :: diag_field_id    !< The input field
+    INTEGER, INTENT(in) :: out_num          !< One of its output fields
+    LOGICAL, INTENT(in) :: mask_present     !< True if a logical mask was passed
+    INTEGER, INTENT(in) :: numthreads       !< Number of OpenMP threads of the caller
+    INTEGER, INTENT(in) :: active_omp_level !< OpenMP nesting level of the caller
+    CHARACTER(len=128) :: reason            !< Why the field cannot be updated, or ''
+
+    reason = ''
+    IF ( use_refactored_send ) reason = 'use_refactored_send is not supported'
+    IF ( debug_diag_manager ) reason = 'debug_diag_manager is not supported'
+    IF ( numthreads /= 1 .OR. active_omp_level > 1 ) reason = 'posts from OpenMP threads are not supported'
+    IF ( input_fields(diag_field_id)%mask_variant ) reason = 'mask_variant is not supported'
+    IF ( input_fields(diag_field_id)%range_present ) reason = 'a valid range is not supported'
+    IF ( mask_present .AND. .NOT.input_fields(diag_field_id)%missing_value_present ) &
+       & reason = 'a mask on a field without a missing value is not supported'
+    IF ( output_fields(out_num)%local_output ) reason = 'regional output is not supported'
+    IF ( output_fields(out_num)%reduced_k_range ) reason = 'output on a reduced k range is not supported'
+    IF ( output_fields(out_num)%time_sum .OR. output_fields(out_num)%time_rms ) &
+       & reason = 'time sum and rms are not supported'
+    IF ( output_fields(out_num)%pow_value /= 1 ) reason = 'pow output is not supported'
+    IF ( output_fields(out_num)%n_diurnal_samples /= 1 ) reason = 'diurnal samples are not supported'
+  END FUNCTION device_post_unsupported
+
+  !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
+  !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_alloc_real_3d(a)
+    REAL, DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target enter data map(alloc: a)
+  END SUBROUTINE device_alloc_real_3d
+
+  !> Release the OpenMP device copies of the data and out-of-range mask temporaries of diag_send_data. It wraps
+  !! the directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_release(field_out, oor_mask)
+    REAL, DIMENSION(:,:,:) :: field_out !< The copy of the field
+    LOGICAL, DIMENSION(:,:,:) :: oor_mask !< The out-of-range mask
+    !$omp target exit data map(release: field_out, oor_mask)
+  END SUBROUTINE device_release
+
+  !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
+  !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_alloc_r4_3d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target enter data map(alloc: a)
+  END SUBROUTINE device_alloc_r4_3d
+
+  !> Delete the OpenMP device copy of a temporary of send_data. It wraps the directive
+  !! only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_delete_r4_3d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target exit data map(delete: a)
+  END SUBROUTINE device_delete_r4_3d
+
+  !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
+  !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_alloc_r8_3d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target enter data map(alloc: a)
+  END SUBROUTINE device_alloc_r8_3d
+
+  !> Delete the OpenMP device copy of a temporary of send_data. It wraps the directive
+  !! only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_delete_r8_3d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target exit data map(delete: a)
+  END SUBROUTINE device_delete_r8_3d
+
+  !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
+  !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_alloc_logical_3d(a)
+    LOGICAL, DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target enter data map(alloc: a)
+  END SUBROUTINE device_alloc_logical_3d
+
+  !> Delete the OpenMP device copy of a temporary of send_data. It wraps the directive
+  !! only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_delete_logical_3d(a)
+    LOGICAL, DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target exit data map(delete: a)
+  END SUBROUTINE device_delete_logical_3d
+
+
+  !> Copy an argument of send_data to the OpenMP device unless it is there. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_map_r4_2d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:) :: a !< The argument
+    !$omp target enter data map(to: a)
+  END SUBROUTINE device_map_r4_2d
+
+  !> Drop the device copy of an argument of send_data if device_map made it. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_unmap_r4_2d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:) :: a !< The argument
+    !$omp target exit data map(release: a)
+  END SUBROUTINE device_unmap_r4_2d
+
+  !> Copy an argument of send_data to the OpenMP device unless it is there. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_map_r4_3d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:,:) :: a !< The argument
+    !$omp target enter data map(to: a)
+  END SUBROUTINE device_map_r4_3d
+
+  !> Drop the device copy of an argument of send_data if device_map made it. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_unmap_r4_3d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:,:) :: a !< The argument
+    !$omp target exit data map(release: a)
+  END SUBROUTINE device_unmap_r4_3d
+
+  !> Copy an argument of send_data to the OpenMP device unless it is there. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_map_r8_2d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:) :: a !< The argument
+    !$omp target enter data map(to: a)
+  END SUBROUTINE device_map_r8_2d
+
+  !> Drop the device copy of an argument of send_data if device_map made it. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_unmap_r8_2d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:) :: a !< The argument
+    !$omp target exit data map(release: a)
+  END SUBROUTINE device_unmap_r8_2d
+
+  !> Copy an argument of send_data to the OpenMP device unless it is there. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_map_r8_3d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:,:) :: a !< The argument
+    !$omp target enter data map(to: a)
+  END SUBROUTINE device_map_r8_3d
+
+  !> Drop the device copy of an argument of send_data if device_map made it. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_unmap_r8_3d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:,:) :: a !< The argument
+    !$omp target exit data map(release: a)
+  END SUBROUTINE device_unmap_r8_3d
+
+  !> Copy an argument of send_data to the OpenMP device unless it is there. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_map_logical_2d(a)
+    LOGICAL, DIMENSION(:,:) :: a !< The argument
+    !$omp target enter data map(to: a)
+  END SUBROUTINE device_map_logical_2d
+
+  !> Drop the device copy of an argument of send_data if device_map made it. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_unmap_logical_2d(a)
+    LOGICAL, DIMENSION(:,:) :: a !< The argument
+    !$omp target exit data map(release: a)
+  END SUBROUTINE device_unmap_logical_2d
+
+  !> Copy an argument of send_data to the OpenMP device unless it is there. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_map_logical_3d(a)
+    LOGICAL, DIMENSION(:,:,:) :: a !< The argument
+    !$omp target enter data map(to: a)
+  END SUBROUTINE device_map_logical_3d
+
+  !> Drop the device copy of an argument of send_data if device_map made it. It wraps the directive only because
+  !! nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_unmap_logical_3d(a)
+    LOGICAL, DIMENSION(:,:,:) :: a !< The argument
+    !$omp target exit data map(release: a)
+  END SUBROUTINE device_unmap_logical_3d
 
   !> @brief Updates the output buffer for a field based on the data for current time step
   !! @return true if send is successful
@@ -3723,14 +4259,19 @@ END FUNCTION register_static_field
     LOGICAL :: average, time_rms, need_compute, phys_window
     INTEGER :: in_num, file_num, freq, units
     INTEGER :: b1,b2,b3,b4 !< size of buffer along x,y,z,and diurnal axes
-    INTEGER :: i, j, k, m
+    INTEGER :: i, j, k, l, m
     REAL    :: missvalue, num
+    REAL    :: fill_value !< The value the buffer is reset to after an output
+    LOGICAL :: dev !< True if the buffer of the field is on the device
+    LOGICAL :: any_found !< True if the buffer holds a value other than the missing value
     writing_field = 0
 
     need_compute = output_fields(out_num)%need_compute
 
     in_num = output_fields(out_num)%input_field
     IF ( input_fields(in_num)%static ) RETURN
+    ! The buffer of a field posted from the device is averaged and reset there. The counts are on the host.
+    dev = output_fields(out_num)%buffer_on_device
 
     missvalue = input_fields(in_num)%missing_value
     missvalue_present = input_fields(in_num)%missing_value_present
@@ -3772,6 +4313,7 @@ END FUNCTION register_static_field
              END DO
           END DO
        ELSE  !not mask variant
+          ASSOCIATE (buf => output_fields(out_num)%buffer)
           DO m = 1, b4
              IF ( phys_window ) THEN
                 IF ( need_compute .OR. reduced_k_range ) THEN
@@ -3784,25 +4326,51 @@ END FUNCTION register_static_field
              END IF
              IF ( num > 0. ) THEN
                 IF ( missvalue_present ) THEN
+                   !$omp target teams loop collapse(3) if(dev)
                    DO k=1, b3
                       DO j=1, b2
                          DO i=1, b1
-                            IF ( output_fields(out_num)%buffer(i,j,k,m) /= missvalue ) THEN
-                               output_fields(out_num)%buffer(i,j,k,m) = output_fields(out_num)%buffer(i,j,k,m)/num
-                               IF ( time_rms ) output_fields(out_num)%buffer(i,j,k,m) =&
-                                    & SQRT(output_fields(out_num)%buffer(i,j,k,m))
+                            IF ( buf(i,j,k,m) /= missvalue ) THEN
+                               buf(i,j,k,m) = buf(i,j,k,m)/num
+                               IF ( time_rms ) buf(i,j,k,m) = SQRT(buf(i,j,k,m))
                             END IF
                          END DO
                       END DO
                    END DO
                 ELSE
-                   output_fields(out_num)%buffer(:,:,:,m) = output_fields(out_num)%buffer(:,:,:,m)/num
-                   IF ( time_rms ) output_fields(out_num)%buffer(:,:,:,m) =&
-                        & SQRT(output_fields(out_num)%buffer(:,:,:,m))
+                   !$omp target teams loop collapse(3) if(dev)
+                   DO k=1, b3
+                      DO j=1, b2
+                         DO i=1, b1
+                            buf(i,j,k,m) = buf(i,j,k,m)/num
+                            IF ( time_rms ) buf(i,j,k,m) = SQRT(buf(i,j,k,m))
+                         END DO
+                      END DO
+                   END DO
                 END IF
              ELSE IF ( .NOT. at_diag_end ) THEN
                 IF ( missvalue_present ) THEN
-                   IF(ANY(output_fields(out_num)%buffer /= missvalue)) THEN
+                   any_found = .FALSE.
+                   ! nvfortran 26.9: the host fallback of a reduction loop copies the scalar to and from
+                   ! the device, which loses the host result. Map it by hand and copy it back only
+                   ! if the loop ran on the device.
+                   !$omp target enter data map(to: any_found)
+                   !$omp target teams loop collapse(4) reduction(.or.:any_found) if(dev)
+                   DO l=1, b4
+                      DO k=1, b3
+                         DO j=1, b2
+                            DO i=1, b1
+                               IF ( buf(i,j,k,l) /= missvalue ) any_found = .TRUE.
+                            END DO
+                         END DO
+                      END DO
+                   END DO
+                   IF (dev) THEN
+                     !$omp target exit data map(from: any_found)
+                   ELSE
+                     !$omp target exit data map(release: any_found)
+                   END IF
+                   IF ( any_found ) THEN
                       WRITE (error_string,'(a,"/",a)')&
                            & TRIM(input_fields(in_num)%module_name), &
                            & TRIM(output_fields(out_num)%output_name)
@@ -3812,14 +4380,34 @@ END FUNCTION register_static_field
                 END IF
              END IF
           END DO
+          END ASSOCIATE
        END IF ! mask_variant
     ELSE IF ( time_min .OR. time_max ) THEN
        IF ( missvalue_present ) THEN
-          WHERE ( ABS(output_fields(out_num)%buffer) == MIN_VALUE )
-             output_fields(out_num)%buffer = missvalue
-          END WHERE
+          b1 = SIZE(output_fields(out_num)%buffer,1)
+          b2 = SIZE(output_fields(out_num)%buffer,2)
+          b3 = SIZE(output_fields(out_num)%buffer,3)
+          b4 = SIZE(output_fields(out_num)%buffer,4)
+          ASSOCIATE (buf => output_fields(out_num)%buffer)
+          !$omp target teams loop collapse(4) if(dev)
+          DO m = 1, b4
+             DO k = 1, b3
+                DO j = 1, b2
+                   DO i = 1, b1
+                      IF ( ABS(buf(i,j,k,m)) == MIN_VALUE ) buf(i,j,k,m) = missvalue
+                   END DO
+                END DO
+             END DO
+          END DO
+          END ASSOCIATE
        END IF ! if missvalue is NOT present buffer retains max_value or min_value
     END IF !average
+
+    ! The output below uses the host copy of the buffer.
+    IF ( dev ) THEN
+       !$omp target update from(output_fields(out_num)%buffer)
+       output_fields(out_num)%buffer_host_current = .TRUE.
+    END IF
 
     ! Output field
     IF ( at_diag_end .AND. freq == END_OF_RUN ) output_fields(out_num)%next_output = time
@@ -3859,12 +4447,29 @@ END FUNCTION register_static_field
        output_fields(out_num)%count_0d(:) = 0.0
        output_fields(out_num)%num_elements(:) = 0
        IF ( time_max ) THEN
-          output_fields(out_num)%buffer = MAX_VALUE
+          fill_value = MAX_VALUE
        ELSE IF ( time_min ) THEN
-          output_fields(out_num)%buffer = MIN_VALUE
+          fill_value = MIN_VALUE
        ELSE
-          output_fields(out_num)%buffer = EMPTY
+          fill_value = EMPTY
        END IF
+       b1 = SIZE(output_fields(out_num)%buffer,1)
+       b2 = SIZE(output_fields(out_num)%buffer,2)
+       b3 = SIZE(output_fields(out_num)%buffer,3)
+       b4 = SIZE(output_fields(out_num)%buffer,4)
+       ASSOCIATE (buf => output_fields(out_num)%buffer)
+       !$omp target teams loop collapse(4) if(dev)
+       DO m = 1, b4
+          DO k = 1, b3
+             DO j = 1, b2
+                DO i = 1, b1
+                   buf(i,j,k,m) = fill_value
+                END DO
+             END DO
+          END DO
+       END DO
+       END ASSOCIATE
+       IF ( dev ) output_fields(out_num)%buffer_host_current = .FALSE.
        IF ( input_fields(in_num)%mask_variant .AND. average ) output_fields(out_num)%counter = 0.0
     END IF
   END FUNCTION writing_field
@@ -3985,12 +4590,21 @@ END FUNCTION register_static_field
     TYPE(time_type), INTENT(in) :: time
 
     INTEGER :: file
+    INTEGER :: out_num
 
     IF ( do_diag_field_log ) THEN
        close (diag_log_unit)
     END IF
     DO file = 1, num_files
        CALL closing_file(file, time)
+    END DO
+    ! Release the device copies of the buffers of fields posted from the device.
+    DO out_num = 1, num_output_fields
+       IF ( output_fields(out_num)%buffer_on_device ) THEN
+          !$omp target exit data map(delete: output_fields(out_num)%buffer)
+          output_fields(out_num)%buffer_on_device = .FALSE.
+          output_fields(out_num)%buffer_host_current = .TRUE.
+       END IF
     END DO
     if (allocated(fileobjU)) deallocate(fileobjU)
     if (allocated(fileobj)) deallocate(fileobj)
@@ -4079,6 +4693,7 @@ END FUNCTION register_static_field
   !> @brief Initialize Diagnostics Manager.
   !! @details Open and read diag_table. Select fields and files for diagnostic output.
   SUBROUTINE diag_manager_init(diag_model_subset, time_init, err_msg)
+!$  USE omp_lib, ONLY: omp_get_default_device, omp_get_num_devices
     INTEGER, OPTIONAL, INTENT(IN) :: diag_model_subset
     INTEGER, DIMENSION(6), OPTIONAL, INTENT(IN) :: time_init !< Model time diag_manager initialized
     CHARACTER(len=*), INTENT(out), OPTIONAL :: err_msg
@@ -4111,6 +4726,11 @@ END FUNCTION register_static_field
     ! These init routine only write out the version number to the log file
     call diag_util_init()
     call diag_data_init()
+
+    ! Posts with on_device=.true. update the buffers on the device only if OpenMP target regions run on one, that
+    ! is, if the default device is not the host. Without OpenMP, these lines are comments.
+!$  device_posts = omp_get_default_device() >= 0 .AND. &
+!$     & omp_get_default_device() < omp_get_num_devices()
 
     ! Determine pack_size from how many bytes a real value has (how compiled)
     pack_size = SIZE(TRANSFER(0.0_DblKind, (/0.0, 0.0, 0.0, 0.0/)))

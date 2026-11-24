@@ -299,6 +299,10 @@ use platform_mod
 !ug support
      logical :: reduced_k_unstruct = .false.
 !----------
+     LOGICAL :: buffer_on_device = .false. !< If true, buffer has an OpenMP device copy that holds the current
+                                           !! values, because the field is posted from the device.
+     LOGICAL :: buffer_host_current = .true. !< If true, the host copy of buffer matches the device copy, so it
+                                             !! need not be copied back.
   END TYPE output_field_type
 
   !> @brief Type to hold the diagnostic axis description.
