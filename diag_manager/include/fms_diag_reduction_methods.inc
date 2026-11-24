@@ -22,7 +22,7 @@
 #endif
 
 !> @brief Do the time_none reduction method (i.e copy the correct portion of the input data)
-subroutine DO_TIME_NONE_ (data_out, data_in, mask, is_masked, bounds_in, bounds_out, missing_value)
+subroutine DO_TIME_NONE_ (data_out, data_in, mask, is_masked, bounds_in, bounds_out, missing_value, on_device)
   real(FMS_TRM_KIND_),       intent(inout) :: data_out(:,:,:,:,:) !< output data
   real(FMS_TRM_KIND_),       intent(in)    :: data_in(:,:,:,:)    !< data to update the buffer with
   logical,                   intent(in)    :: mask(:,:,:,:)       !< mask
@@ -32,12 +32,19 @@ subroutine DO_TIME_NONE_ (data_out, data_in, mask, is_masked, bounds_in, bounds_
   type(fmsDiagIbounds_type), intent(in)    :: bounds_out          !< indices indicating the correct portion
                                                                   !! of the output buffer
   real(FMS_TRM_KIND_),       intent(in)    :: missing_value       !< Missing_value for data points that are masked
+  logical, optional,         intent(in)    :: on_device           !< If true, the data and the buffer are on the
+                                                                  !! OpenMP device and the update is done there
 
   integer :: is_in, ie_in, js_in, je_in, ks_in, ke_in       !< Starting and ending indices of each dimention for
                                                             !! the input buffer
   integer :: is_out, ie_out, js_out, je_out, ks_out, ke_out !< Starting and ending indices of each dimention for
                                                             !! the output buffer
+  integer :: i, j, k, l, nl !< For looping
+  logical :: dev            !< .True. if the update is done on the device
 
+  dev = .false.
+  if (present(on_device)) dev = on_device
+  nl = size(data_out, 4)
   is_out = bounds_out%get_imin()
   ie_out = bounds_out%get_imax()
   js_out = bounds_out%get_jmin()
@@ -53,21 +60,37 @@ subroutine DO_TIME_NONE_ (data_out, data_in, mask, is_masked, bounds_in, bounds_
   ke_in = bounds_in%get_kmax()
 
   if (is_masked) then
-    where (mask(is_in:ie_in, js_in:je_in, ks_in:ke_in, :))
-      data_out(is_out:ie_out, js_out:je_out, ks_out:ke_out, :, 1) = &
-      data_in(is_in:ie_in, js_in:je_in, ks_in:ke_in, :)
-    elsewhere
-      data_out(is_out:ie_out, js_out:je_out, ks_out:ke_out, :, 1) = missing_value
-    end where
+    !$omp target teams loop collapse(4) if(dev)
+    do l = 1, nl
+      do k = 0, ke_out - ks_out
+        do j = 0, je_out - js_out
+          do i = 0, ie_out - is_out
+            if (mask(is_in + i, js_in + j, ks_in + k, l)) then
+              data_out(is_out + i, js_out + j, ks_out + k, l, 1) = data_in(is_in + i, js_in + j, ks_in + k, l)
+            else
+              data_out(is_out + i, js_out + j, ks_out + k, l, 1) = missing_value
+            endif
+          enddo
+        enddo
+      enddo
+    enddo
   else
-    data_out(is_out:ie_out, js_out:je_out, ks_out:ke_out, :, 1) = &
-      data_in(is_in:ie_in, js_in:je_in, ks_in:ke_in, :)
+    !$omp target teams loop collapse(4) if(dev)
+    do l = 1, nl
+      do k = 0, ke_out - ks_out
+        do j = 0, je_out - js_out
+          do i = 0, ie_out - is_out
+            data_out(is_out + i, js_out + j, ks_out + k, l, 1) = data_in(is_in + i, js_in + j, ks_in + k, l)
+          enddo
+        enddo
+      enddo
+    enddo
   endif
 
 end subroutine DO_TIME_NONE_
 
 !> @brief Do the time_min reduction method (i.e maintain the minimum value of the averaging time)
-subroutine DO_TIME_MIN_ (data_out, data_in, mask, is_masked, bounds_in, bounds_out, missing_value)
+subroutine DO_TIME_MIN_ (data_out, data_in, mask, is_masked, bounds_in, bounds_out, missing_value, on_device)
   real(FMS_TRM_KIND_),       intent(inout) :: data_out(:,:,:,:,:) !< output data
   real(FMS_TRM_KIND_),       intent(in)    :: data_in(:,:,:,:)    !< data to update the buffer with
   logical,                   intent(in)    :: mask(:,:,:,:)       !< mask
@@ -77,6 +100,8 @@ subroutine DO_TIME_MIN_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
   type(fmsDiagIbounds_type), intent(in)    :: bounds_out          !< indices indicating the correct portion
                                                                   !! of the output buffer
   real(FMS_TRM_KIND_),       intent(in)    :: missing_value       !< Missing_value for data points that are masked
+  logical, optional,         intent(in)    :: on_device           !< If true, the data and the buffer are on the
+                                                                  !! OpenMP device and the update is done there
 
   integer :: is_in, ie_in, js_in, je_in, ks_in, ke_in       !< Starting and ending indices of each dimention for
                                                             !! the input buffer
@@ -84,6 +109,10 @@ subroutine DO_TIME_MIN_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
                                                             !! the output buffer
 
   integer :: i, j, k, l !< For looping
+  logical :: dev            !< .True. if the update is done on the device
+
+  dev = .false.
+  if (present(on_device)) dev = on_device
 
   is_out = bounds_out%get_imin()
   ie_out = bounds_out%get_imax()
@@ -102,6 +131,7 @@ subroutine DO_TIME_MIN_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
   !> Separated this loops for performance. If is_masked = .false. (i.e "mask" and "rmask" were never passed in)
   !! then mask will always be .True. so the if (mask) is redudant.
   if (is_masked) then
+    !$omp target teams loop collapse(4) if(dev)
     do l = 0, size(data_out, 4) - 1
       do k = 0, ke_out - ks_out
         do j = 0, je_out - js_out
@@ -120,6 +150,7 @@ subroutine DO_TIME_MIN_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
       enddo
     enddo
   else
+    !$omp target teams loop collapse(4) if(dev)
     do l = 0, size(data_out, 4) - 1
       do k = 0, ke_out - ks_out
         do j = 0, je_out - js_out
@@ -138,7 +169,7 @@ subroutine DO_TIME_MIN_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
 end subroutine DO_TIME_MIN_
 
 !> @brief Do the time_max reduction method (i.e maintain the maximum value of the averaging time)
-subroutine DO_TIME_MAX_ (data_out, data_in, mask, is_masked, bounds_in, bounds_out, missing_value)
+subroutine DO_TIME_MAX_ (data_out, data_in, mask, is_masked, bounds_in, bounds_out, missing_value, on_device)
   real(FMS_TRM_KIND_),       intent(inout) :: data_out(:,:,:,:,:) !< output data
   real(FMS_TRM_KIND_),       intent(in)    :: data_in(:,:,:,:)    !< data to update the buffer with
   logical,                   intent(in)    :: mask(:,:,:,:)       !< mask
@@ -148,6 +179,8 @@ subroutine DO_TIME_MAX_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
   type(fmsDiagIbounds_type), intent(in)    :: bounds_out          !< indices indicating the correct portion
                                                                   !! of the output buffer
   real(FMS_TRM_KIND_),       intent(in)    :: missing_value       !< Missing_value for data points that are masked
+  logical, optional,         intent(in)    :: on_device           !< If true, the data and the buffer are on the
+                                                                  !! OpenMP device and the update is done there
 
   integer :: is_in, ie_in, js_in, je_in, ks_in, ke_in       !< Starting and ending indices of each dimention for
                                                             !! the input buffer
@@ -155,6 +188,10 @@ subroutine DO_TIME_MAX_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
                                                             !! the output buffer
 
   integer :: i, j, k, l !< For looping
+  logical :: dev            !< .True. if the update is done on the device
+
+  dev = .false.
+  if (present(on_device)) dev = on_device
 
   is_out = bounds_out%get_imin()
   ie_out = bounds_out%get_imax()
@@ -173,6 +210,7 @@ subroutine DO_TIME_MAX_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
   !> Separated this loops for performance. If is_masked = .false. (i.e "mask" and "rmask" were never passed in)
   !! then mask will always be .True. so the if (mask) is redudant.
   if (is_masked) then
+    !$omp target teams loop collapse(4) if(dev)
     do l = 0, size(data_out, 4) - 1
       do k = 0, ke_out - ks_out
         do j = 0, je_out - js_out
@@ -191,6 +229,7 @@ subroutine DO_TIME_MAX_ (data_out, data_in, mask, is_masked, bounds_in, bounds_o
       enddo
     enddo
   else
+    !$omp target teams loop collapse(4) if(dev)
     do l = 0, size(data_out, 4) - 1
       do k = 0, ke_out - ks_out
         do j = 0, je_out - js_out
@@ -214,7 +253,7 @@ end subroutine DO_TIME_MAX_
 !!
 !! Where l are the indices passed in through the bounds_in/out
 subroutine DO_TIME_SUM_UPDATE_(data_out, weight_sum, data_in, mask, is_masked, mask_variant, bounds_in, bounds_out, &
-                               missing_value, diurnal_section, weight, pow)
+                               missing_value, diurnal_section, weight, pow, on_device)
   real(FMS_TRM_KIND_),       intent(inout) :: data_out(:,:,:,:,:) !< output data
   real(r8_kind),             intent(inout) :: weight_sum(:,:,:,:) !< Sum of weights from the output buffer object
   real(FMS_TRM_KIND_),       intent(in)    :: data_in(:,:,:,:)    !< data to update the buffer with
@@ -233,6 +272,8 @@ subroutine DO_TIME_SUM_UPDATE_(data_out, weight_sum, data_in, mask, is_masked, m
                                                               !! used for weighted averages, default 1.0
   integer ,optional, intent(in) :: pow                            !< Used for pow(er) reduction,
                                                                   !! calculates field_data^pow before adding to buffer
+  logical, optional,         intent(in)    :: on_device           !< If true, the data and the buffer are on the
+                                                                  !! OpenMP device and the update is done there
 
   real(FMS_TRM_KIND_) :: weight_scale !< local copy of optional weight
   integer, parameter  :: kindl = FMS_TRM_KIND_ !< real kind size as set by macro
@@ -257,15 +298,15 @@ subroutine DO_TIME_SUM_UPDATE_(data_out, weight_sum, data_in, mask, is_masked, m
       call sum_mask_variant(data_out, data_in, weight_sum, bounds_in, bounds_out, mask, diurnal, weight_scale, pow)
     else
       call sum_mask(data_out, data_in, weight_sum, bounds_in, bounds_out, mask, diurnal, &
-        missing_value, weight_scale, pow)
+        missing_value, weight_scale, pow, on_device)
     endif
   else
-    call sum_no_mask(data_out, data_in, weight_sum, bounds_in, bounds_out, diurnal, weight_scale, pow)
+    call sum_no_mask(data_out, data_in, weight_sum, bounds_in, bounds_out, diurnal, weight_scale, pow, on_device)
   endif
 end subroutine DO_TIME_SUM_UPDATE_
 
 subroutine SUM_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, mask, diurnal, missing_value, &
-  weight_scale, pow)
+  weight_scale, pow, on_device)
   real(FMS_TRM_KIND_),       intent(inout) :: data_out(:,:,:,:,:) !< output data
   real(FMS_TRM_KIND_),       intent(in)    :: data_in(:,:,:,:)    !< data to update the buffer with
   real(r8_kind),             intent(inout) :: weight_sum(:,:,:,:) !< Sum of weights from the output buffer object
@@ -280,6 +321,8 @@ subroutine SUM_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, mask,
   real(FMS_TRM_KIND_),       intent(in)    :: weight_scale        !< weight scale to use
   integer ,optional,         intent(in)    :: pow                 !< Used for pow(er) reduction,
                                                                   !! calculates field_data^pow before adding to buffer
+  logical, optional,         intent(in)    :: on_device           !< If true, the data and the buffer are on the
+                                                                  !! OpenMP device and the update is done there
 
   integer :: is_in, ie_in, js_in, je_in, ks_in, ke_in       !< Starting and ending indices of each dimention for
                                                             !! the input buffer
@@ -287,6 +330,12 @@ subroutine SUM_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, mask,
                                                             !! the output buffer
   integer :: pow_loc !> local copy of optional pow value (set if using pow reduction)
   integer :: i, j, k, l !< For looping
+  integer :: nl         !< Size of the fourth dimension
+  logical :: dev        !< .True. if the update is done on the device
+
+  dev = .false.
+  if (present(on_device)) dev = on_device
+  nl = size(data_out, 4)
 
   is_out = bounds_out%get_imin()
   ie_out = bounds_out%get_imax()
@@ -318,16 +367,19 @@ subroutine SUM_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, mask,
       enddo
     enddo
   else
-    do k = 0, ke_out - ks_out
-      do j = 0, je_out - js_out
-        do i = 0, ie_out - is_out
-          where (mask(is_in + i, js_in + j, ks_in + k, :))
-            data_out(is_out + i, js_out + j, ks_out + k, :, diurnal) =           &
-                   data_out(is_out + i, js_out + j, ks_out + k, :, diurnal)  &
-                 + (data_in(is_in +i, js_in + j, ks_in + k, :) * weight_scale)
-          elsewhere
-            data_out(is_out + i, js_out + j, ks_out + k, :, diurnal) = missing_value
-          endwhere
+    !$omp target teams loop collapse(4) if(dev)
+    do l = 1, nl
+      do k = 0, ke_out - ks_out
+        do j = 0, je_out - js_out
+          do i = 0, ie_out - is_out
+            if (mask(is_in + i, js_in + j, ks_in + k, l)) then
+              data_out(is_out + i, js_out + j, ks_out + k, l, diurnal) =           &
+                     data_out(is_out + i, js_out + j, ks_out + k, l, diurnal)  &
+                   + (data_in(is_in +i, js_in + j, ks_in + k, l) * weight_scale)
+            else
+              data_out(is_out + i, js_out + j, ks_out + k, l, diurnal) = missing_value
+            endif
+          enddo
         enddo
       enddo
     enddo
@@ -405,7 +457,7 @@ subroutine SUM_MASK_VARIANT_(data_out, data_in, weight_sum, bounds_in, bounds_ou
   endif
 end subroutine SUM_MASK_VARIANT_
 
-subroutine SUM_NO_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, diurnal, weight_scale, pow)
+subroutine SUM_NO_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, diurnal, weight_scale, pow, on_device)
   real(FMS_TRM_KIND_),       intent(inout) :: data_out(:,:,:,:,:) !< output data
   real(FMS_TRM_KIND_),       intent(in)    :: data_in(:,:,:,:)    !< data to update the buffer with
   real(r8_kind),             intent(inout) :: weight_sum(:,:,:,:) !< Sum of weights from the output buffer object
@@ -418,13 +470,20 @@ subroutine SUM_NO_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, di
   real(FMS_TRM_KIND_),       intent(in)    :: weight_scale        !< weight scale to use
   integer ,optional,         intent(in)    :: pow                 !< Used for pow(er) reduction,
                                                                   !! calculates field_data^pow before adding to buffer
+  logical, optional,         intent(in)    :: on_device           !< If true, the data and the buffer are on the
+                                                                  !! OpenMP device and the update is done there
 
   integer :: is_in, ie_in, js_in, je_in, ks_in, ke_in       !< Starting and ending indices of each dimention for
                                                             !! the input buffer
   integer :: is_out, ie_out, js_out, je_out, ks_out, ke_out !< Starting and ending indices of each dimention for
                                                             !! the output buffer
   integer :: i, j, k, l !< For looping
+  integer :: nl         !< Size of the fourth dimension
+  logical :: dev        !< .True. if the update is done on the device
 
+  dev = .false.
+  if (present(on_device)) dev = on_device
+  nl = size(data_out, 4)
   is_out = bounds_out%get_imin()
   ie_out = bounds_out%get_imax()
   js_out = bounds_out%get_jmin()
@@ -452,12 +511,15 @@ subroutine SUM_NO_MASK_(data_out, data_in, weight_sum, bounds_in, bounds_out, di
       enddo
     enddo
   else
-    do k = 0, ke_out - ks_out
-      do j = 0, je_out - js_out
-        do i = 0, ie_out - is_out
-          data_out(is_out + i, js_out + j, ks_out + k,  :, diurnal) =  &
-            data_out(is_out + i, js_out + j, ks_out + k, :, diurnal)  &
-            + (data_in(is_in +i, js_in + j, ks_in + k, :) * weight_scale)
+    !$omp target teams loop collapse(4) if(dev)
+    do l = 1, nl
+      do k = 0, ke_out - ks_out
+        do j = 0, je_out - js_out
+          do i = 0, ie_out - is_out
+            data_out(is_out + i, js_out + j, ks_out + k, l, diurnal) =  &
+              data_out(is_out + i, js_out + j, ks_out + k, l, diurnal)  &
+              + (data_in(is_in +i, js_in + j, ks_in + k, l) * weight_scale)
+          enddo
         enddo
       enddo
     enddo

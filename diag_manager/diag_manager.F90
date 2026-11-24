@@ -1920,8 +1920,6 @@ END FUNCTION register_static_field
 
     dev_post = .FALSE.
     IF ( PRESENT(on_device) ) dev_post = on_device .AND. device_posts
-    IF ( dev_post .AND. use_modern_diag ) CALL error_mesg('diag_manager_mod::send_data', &
-         & 'on_device=.true. is not supported by the modern diag manager', FATAL)
 
     ! First copy the data to a three d array. For a post from the device, the copies of the data and the masks
     ! are made on the device.
@@ -1965,15 +1963,29 @@ END FUNCTION register_static_field
   ! Split old and modern2023 here
   modern_if: iF (use_modern_diag) then
     field_name = fms_diag_object%fms_get_field_name_from_id(diag_field_id)
-    call copy_3d_to_4d(field, field_remap, trim(field_name)//"'s data")
-    if (present(rmask)) call copy_3d_to_4d(rmask, rmask_remap, trim(field_name)//"'s mask")
+    call copy_3d_to_4d(field, field_remap, trim(field_name)//"'s data", dev_post)
+    if (present(rmask)) call copy_3d_to_4d(rmask, rmask_remap, trim(field_name)//"'s mask", dev_post)
     if (present(mask)) then
       allocate(mask_remap(1:size(mask,1), 1:size(mask,2), 1:size(mask,3), 1))
-      mask_remap(:,:,:,1) = mask
+      if (dev_post) call device_alloc_logical_4d(mask_remap)
+      !$omp target teams loop collapse(3) if(dev_post)
+      do k = 1, n3
+        do j = 1, n2
+          do i = 1, n1
+            mask_remap(i,j,k,1) = mask(i,j,k)
+          enddo
+        enddo
+      enddo
     endif
     call fms_diag_object%fms_diag_accept_data(diag_field_id, field_remap, mask_remap, rmask_remap, &
                                                           time, is_in, js_in, ks_in, ie_in, je_in, ke_in, weight, &
-                                                          err_msg)
+                                                          err_msg, on_device=dev_post)
+    if (dev_post) then
+      call device_delete_real_3d(field_out)
+      call device_delete_class_4d(field_remap)
+      if (allocated(mask_remap)) call device_delete_logical_4d(mask_remap)
+      if (allocated(rmask_remap)) call device_delete_class_4d(rmask_remap)
+    endif
     deallocate (field_remap)
     if (allocated(mask_remap)) deallocate(mask_remap)
     if (allocated(rmask_remap)) deallocate(rmask_remap)
@@ -3902,6 +3914,13 @@ END FUNCTION register_static_field
     !$omp target exit data map(release: field_out, oor_mask)
   END SUBROUTINE device_release
 
+  !> Delete the OpenMP device copy of a temporary of send_data. It wraps the directive
+  !! only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_delete_real_3d(a)
+    REAL, DIMENSION(:,:,:) :: a !< The temporary
+    !$omp target exit data map(delete: a)
+  END SUBROUTINE device_delete_real_3d
+
   !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
   !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
   SUBROUTINE device_alloc_r4_3d(a)
@@ -4028,6 +4047,59 @@ END FUNCTION register_static_field
     LOGICAL, DIMENSION(:,:,:) :: a !< The argument
     !$omp target exit data map(release: a)
   END SUBROUTINE device_unmap_logical_3d
+
+  !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
+  !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_alloc_r4_4d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:,:,:) :: a !< The temporary
+    !$omp target enter data map(alloc: a)
+  END SUBROUTINE device_alloc_r4_4d
+
+  !> Delete the OpenMP device copy of a temporary of send_data. It wraps the directive
+  !! only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_delete_r4_4d(a)
+    REAL(kind=r4_kind), DIMENSION(:,:,:,:) :: a !< The temporary
+    !$omp target exit data map(delete: a)
+  END SUBROUTINE device_delete_r4_4d
+
+  !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
+  !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_alloc_r8_4d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:,:,:) :: a !< The temporary
+    !$omp target enter data map(alloc: a)
+  END SUBROUTINE device_alloc_r8_4d
+
+  !> Delete the OpenMP device copy of a temporary of send_data. It wraps the directive
+  !! only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_delete_r8_4d(a)
+    REAL(kind=r8_kind), DIMENSION(:,:,:,:) :: a !< The temporary
+    !$omp target exit data map(delete: a)
+  END SUBROUTINE device_delete_r8_4d
+
+  !> Create an OpenMP device copy of a temporary of send_data, without copying its values. It wraps the
+  !! directive only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_alloc_logical_4d(a)
+    LOGICAL, DIMENSION(:,:,:,:) :: a !< The temporary
+    !$omp target enter data map(alloc: a)
+  END SUBROUTINE device_alloc_logical_4d
+
+  !> Delete the OpenMP device copy of a temporary of send_data. It wraps the directive
+  !! only because nvfortran struggles with inline ones in routines with CLASS(*) data.
+  SUBROUTINE device_delete_logical_4d(a)
+    LOGICAL, DIMENSION(:,:,:,:) :: a !< The temporary
+    !$omp target exit data map(delete: a)
+  END SUBROUTINE device_delete_logical_4d
+
+  !> Delete the OpenMP device copy of a real(kind=r4_kind) or real(kind=r8_kind) temporary of send_data.
+  SUBROUTINE device_delete_class_4d(a)
+    CLASS(*), DIMENSION(:,:,:,:) :: a !< The temporary
+    SELECT TYPE (a)
+    TYPE IS (real(kind=r4_kind))
+       CALL device_delete_r4_4d(a)
+    TYPE IS (real(kind=r8_kind))
+       CALL device_delete_r8_4d(a)
+    END SELECT
+  END SUBROUTINE device_delete_class_4d
 
   !> @brief Updates the output buffer for a field based on the data for current time step
   !! @return true if send is successful
@@ -5226,18 +5298,37 @@ END FUNCTION register_static_field
   END SUBROUTINE diag_field_add_cell_measures
 
   !> @brief Copies a 3d buffer to a 4d buffer
-  subroutine copy_3d_to_4d(data_in, data_out, field_name)
-    class (*),        intent(in) :: data_in(:,:,:) !< Data to copy
+  subroutine copy_3d_to_4d(data_in, data_out, field_name, on_device)
+    class (*),        intent(in), target :: data_in(:,:,:) !< Data to copy
     character(len=*), intent(in) :: field_name     !< Name of the field copying (for error messages)
     class (*), allocatable, intent(out) :: data_out(:,:,:,:) !< 4D version of the data
+    logical,          intent(in) :: on_device      !< If true, data_in is current on the OpenMP device, and the copy
+                                                   !! is made there
 
+    real(kind=r4_kind), pointer :: in_r4(:,:,:) !< data_in with lower bounds of 1, if r4
+    real(kind=r8_kind), pointer :: in_r8(:,:,:) !< data_in with lower bounds of 1, if r8
+    integer :: i, j, k, n1, n2, n3
+
+    n1 = size(data_in,1)
+    n2 = size(data_in,2)
+    n3 = size(data_in,3)
     !TODO this should be extended to integers
+    ! Bounds remapping gives the pointers lower bounds of 1, which nvfortran does not give polymorphic dummies.
     select type(data_in)
     type is (real(kind=r8_kind))
       allocate(real(kind=r8_kind) :: data_out(1:size(data_in,1), 1:size(data_in,2), 1:size(data_in,3), 1))
       select type (data_out)
       type is (real(kind=r8_kind))
-        data_out(:,:,:,1) = data_in
+        if (on_device) call device_alloc_r8_4d(data_out)
+        in_r8(1:,1:,1:) => data_in
+        !$omp target teams loop collapse(3) if(on_device)
+        do k = 1, n3
+          do j = 1, n2
+            do i = 1, n1
+              data_out(i,j,k,1) = in_r8(i,j,k)
+            enddo
+          enddo
+        enddo
       class default
         call mpp_error(FATAL, "The copy of "//trim(field_name)//&
           " was not allocated to the correct type (r8_kind). This shouldn't have happened")
@@ -5246,7 +5337,16 @@ END FUNCTION register_static_field
       allocate(real(kind=r4_kind) :: data_out(1:size(data_in,1), 1:size(data_in,2), 1:size(data_in,3), 1))
       select type (data_out)
       type is (real(kind=r4_kind))
-        data_out(:,:,:,1) = data_in
+        if (on_device) call device_alloc_r4_4d(data_out)
+        in_r4(1:,1:,1:) => data_in
+        !$omp target teams loop collapse(3) if(on_device)
+        do k = 1, n3
+          do j = 1, n2
+            do i = 1, n1
+              data_out(i,j,k,1) = in_r4(i,j,k)
+            enddo
+          enddo
+        enddo
       class default
         call mpp_error(FATAL, "The copy of "//trim(field_name)//&
           " was not allocated to the correct type (r4_kind). This shouldn't have happened")

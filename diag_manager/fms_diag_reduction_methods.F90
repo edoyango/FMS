@@ -137,29 +137,52 @@ module fms_diag_reduction_methods_mod
 
   !> @brief Sets the logical mask based on mask or rmask
   !> @return logical mask
-  function init_mask(rmask, mask, field) &
-  result(oor_mask)
+  subroutine init_mask(oor_mask, rmask, mask, on_device)
+    LOGICAL,  DIMENSION(:,:,:,:),              INTENT(out) :: oor_mask !< The mask, allocated by the caller with
+                                                                       !! the shape of the field data
     LOGICAL,  DIMENSION(:,:,:,:), allocatable, INTENT(in) :: mask  !< The location of the mask
     CLASS(*), DIMENSION(:,:,:,:), allocatable, INTENT(in) :: rmask !< The masking values
-    CLASS(*), DIMENSION(:,:,:,:),          intent(in) :: field !< Field_data
+    LOGICAL,                                   INTENT(in) :: on_device !< If true, mask or rmask and oor_mask
+                                                                       !! are on the OpenMP device, and oor_mask is
+                                                                       !! set there
 
-    logical, allocatable, dimension(:,:,:,:) :: oor_mask !< mask
+    integer :: i, j, k, l, n1, n2, n3, n4 !< For looping
 
-    ALLOCATE(oor_mask(SIZE(field, 1), SIZE(field, 2), SIZE(field, 3), SIZE(field, 4)))
-    oor_mask = .true.
-
+    n1 = SIZE(oor_mask, 1)
+    n2 = SIZE(oor_mask, 2)
+    n3 = SIZE(oor_mask, 3)
+    n4 = SIZE(oor_mask, 4)
     if (allocated(mask)) then
-      oor_mask = mask
+      !$omp target teams loop collapse(4) if(on_device)
+      do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+        oor_mask(i,j,k,l) = mask(i,j,k,l)
+      enddo ; enddo ; enddo ; enddo
     elseif (allocated(rmask)) then
       select type (rmask)
       type is (real(kind=r8_kind))
-        WHERE (rmask < 0.5_r8_kind) oor_mask = .FALSE.
+        !$omp target teams loop collapse(4) if(on_device)
+        do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+          oor_mask(i,j,k,l) = .NOT.(rmask(i,j,k,l) < 0.5_r8_kind)
+        enddo ; enddo ; enddo ; enddo
       type is (real(kind=r4_kind))
-        WHERE (rmask < 0.5_r4_kind) oor_mask = .FALSE.
+        !$omp target teams loop collapse(4) if(on_device)
+        do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+          oor_mask(i,j,k,l) = .NOT.(rmask(i,j,k,l) < 0.5_r4_kind)
+        enddo ; enddo ; enddo ; enddo
+      class default
+        !$omp target teams loop collapse(4) if(on_device)
+        do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+          oor_mask(i,j,k,l) = .true.
+        enddo ; enddo ; enddo ; enddo
       end select
+    else
+      !$omp target teams loop collapse(4) if(on_device)
+      do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+        oor_mask(i,j,k,l) = .true.
+      enddo ; enddo ; enddo ; enddo
     endif
 
-  end function init_mask
+  end subroutine init_mask
 
   !> @brief Sets the weight based on the weight passed into send_data (1.0_r8_kind if the weight is not passed in)
   !! The weight will be saved as an r8 and converted to r4 as needed

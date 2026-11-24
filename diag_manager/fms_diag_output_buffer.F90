@@ -64,6 +64,9 @@ type :: fmsDiagOutputBuffer_type
   integer               :: unlmited_dimension !< Unlimited dimension index of the last write for this output buffer
   type(time_type)       :: time               !< The last time the data was received
   type(time_type)       :: next_output        !< The next time to output the data
+  logical               :: on_device = .false.   !< .True. if buffer is on the OpenMP device, because the field is
+                                                 !! posted from the device
+  logical               :: host_current = .true. !< .True. if the host copy of buffer holds the latest values
 
   contains
   procedure :: get_buffer_name
@@ -104,6 +107,9 @@ type :: fmsDiagOutputBuffer_type
   procedure :: set_diurnal_sample_size
   procedure :: set_diurnal_section_index
   procedure :: get_remapped_diurnal_data
+  procedure :: map_to_device
+  procedure :: device_to_host
+  procedure :: delete_device
 end type fmsDiagOutputBuffer_type
 
 ! public types
@@ -256,28 +262,47 @@ subroutine initialize_buffer (this, reduction_method, field_name)
   integer,                         intent(in)    :: reduction_method !< The reduction method for the field
   character(len=*),                intent(in)    :: field_name       !< field name for error output
 
+  real(kind=r8_kind) :: fill_r8 !< The value a real(r8_kind) buffer is set to
+  real(kind=r4_kind) :: fill_r4 !< The value a real(r4_kind) buffer is set to
+  integer :: i, j, k, l, m, n1, n2, n3, n4, n5 !< For looping
+  logical :: dev !< .True. if the buffer is on the OpenMP device, where it is set
+
   if(.not. allocated(this%buffer)) call mpp_error(FATAL, 'initialize_buffer: field:'// field_name // &
       'buffer not yet allocated, allocate_buffer() must be called on this object first.')
 
+  dev = this%on_device
+  n1 = size(this%buffer,1)
+  n2 = size(this%buffer,2)
+  n3 = size(this%buffer,3)
+  n4 = size(this%buffer,4)
+  n5 = size(this%buffer,5)
   select type(buff => this%buffer)
   type is(real(r8_kind))
     select case (reduction_method)
     case (time_min)
-      buff = real(MIN_VALUE, kind=r8_kind)
+      fill_r8 = real(MIN_VALUE, kind=r8_kind)
     case (time_max)
-      buff = real(MAX_VALUE, kind=r8_kind)
+      fill_r8 = real(MAX_VALUE, kind=r8_kind)
     case default
-      buff = real(EMPTY, kind=r8_kind)
+      fill_r8 = real(EMPTY, kind=r8_kind)
     end select
+    !$omp target teams loop collapse(5) if(dev)
+    do m = 1, n5 ; do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+      buff(i,j,k,l,m) = fill_r8
+    enddo ; enddo ; enddo ; enddo ; enddo
   type is(real(r4_kind))
     select case (reduction_method)
     case (time_min)
-      buff = real(MIN_VALUE, kind=r4_kind)
+      fill_r4 = real(MIN_VALUE, kind=r4_kind)
     case (time_max)
-      buff = real(MAX_VALUE, kind=r4_kind)
+      fill_r4 = real(MAX_VALUE, kind=r4_kind)
     case default
-      buff = real(EMPTY, kind=r4_kind)
+      fill_r4 = real(EMPTY, kind=r4_kind)
     end select
+    !$omp target teams loop collapse(5) if(dev)
+    do m = 1, n5 ; do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+      buff(i,j,k,l,m) = fill_r4
+    enddo ; enddo ; enddo ; enddo ; enddo
   type is(integer(i8_kind))
     select case (reduction_method)
     case (time_min)
@@ -497,6 +522,8 @@ subroutine write_buffer(this, fms2io_fileobj, unlim_dim_level, is_diurnal)
 
   call this%initialize_buffer(diag_yaml%diag_fields(this%yaml_id)%get_var_reduction(), &
     diag_yaml%diag_fields(this%yaml_id)%get_var_outname())
+  !< A buffer on the device was reset there, so its host copy (just written) is out of date
+  if (this%on_device) this%host_current = .false.
   !TODO Set the counters back to 0
 end subroutine write_buffer
 
@@ -633,7 +660,7 @@ end subroutine write_buffer_wrapper_u
 
 !> @brief Does the time_none reduction method on the buffer object
 !! @return Error message if the math was not successful
-function do_time_none_wrapper(this, field_data, mask, is_masked, bounds_in, bounds_out, missing_value) &
+function do_time_none_wrapper(this, field_data, mask, is_masked, bounds_in, bounds_out, missing_value, on_device) &
   result(err_msg)
   class(fmsDiagOutputBuffer_type), intent(inout) :: this                !< buffer object to write
   class(*),                        intent(in)    :: field_data(:,:,:,:) !< Buffer data for current time
@@ -642,6 +669,8 @@ function do_time_none_wrapper(this, field_data, mask, is_masked, bounds_in, boun
   logical,                         intent(in)    :: mask(:,:,:,:)       !< Mask for the field
   logical,                         intent(in)    :: is_masked           !< .True. if the field has a mask
   real(kind=r8_kind),              intent(in)    :: missing_value       !< Missing_value for data points that are masked
+  logical, optional,               intent(in)    :: on_device           !< .True. if the data and the buffer are on
+                                                                        !! the OpenMP device, where the update is done
   character(len=50) :: err_msg
 
   !TODO This will be expanded for integers
@@ -650,7 +679,8 @@ function do_time_none_wrapper(this, field_data, mask, is_masked, bounds_in, boun
     type is (real(kind=r8_kind))
       select type (field_data)
       type is (real(kind=r8_kind))
-                call do_time_none(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, missing_value)
+                call do_time_none(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, missing_value, &
+                                  on_device)
       class default
         err_msg="do_time_none_wrapper::the output buffer and the buffer send in are not of the same type (r8_kind)"
       end select
@@ -658,7 +688,7 @@ function do_time_none_wrapper(this, field_data, mask, is_masked, bounds_in, boun
       select type (field_data)
       type is (real(kind=r4_kind))
         call do_time_none(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, &
-          real(missing_value, kind=r4_kind))
+          real(missing_value, kind=r4_kind), on_device)
       class default
         err_msg="do_time_none_wrapper::the output buffer and the buffer send in are not of the same type (r4_kind)"
       end select
@@ -667,7 +697,7 @@ end function do_time_none_wrapper
 
 !> @brief Does the time_min reduction method on the buffer object
 !! @return Error message if the math was not successful
-function do_time_min_wrapper(this, field_data, mask, is_masked, bounds_in, bounds_out, missing_value) &
+function do_time_min_wrapper(this, field_data, mask, is_masked, bounds_in, bounds_out, missing_value, on_device) &
   result(err_msg)
   class(fmsDiagOutputBuffer_type), intent(inout) :: this                !< buffer object to write
   class(*),                        intent(in)    :: field_data(:,:,:,:) !< Buffer data for current time
@@ -676,6 +706,8 @@ function do_time_min_wrapper(this, field_data, mask, is_masked, bounds_in, bound
   logical,                         intent(in)    :: mask(:,:,:,:)       !< Mask for the field
   logical,                         intent(in)    :: is_masked           !< .True. if the field has a mask
   real(kind=r8_kind),              intent(in)    :: missing_value       !< Missing_value for data points that are masked
+  logical, optional,               intent(in)    :: on_device           !< .True. if the data and the buffer are on
+                                                                        !! the OpenMP device, where the update is done
   character(len=50) :: err_msg
 
   !TODO This will be expanded for integers
@@ -684,7 +716,8 @@ function do_time_min_wrapper(this, field_data, mask, is_masked, bounds_in, bound
     type is (real(kind=r8_kind))
       select type (field_data)
       type is (real(kind=r8_kind))
-        call do_time_min(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, missing_value)
+        call do_time_min(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, missing_value, &
+                        on_device)
       class default
         err_msg="do_time_min_wrapper::the output buffer and the buffer send in are not of the same type (r8_kind)"
       end select
@@ -692,7 +725,7 @@ function do_time_min_wrapper(this, field_data, mask, is_masked, bounds_in, bound
       select type (field_data)
       type is (real(kind=r4_kind))
         call do_time_min(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, &
-          real(missing_value, kind=r4_kind))
+          real(missing_value, kind=r4_kind), on_device)
       class default
         err_msg="do_time_min_wrapper::the output buffer and the buffer send in are not of the same type (r4_kind)"
       end select
@@ -701,7 +734,7 @@ end function do_time_min_wrapper
 
 !> @brief Does the time_min reduction method on the buffer object
 !! @return Error message if the math was not successful
-function do_time_max_wrapper(this, field_data, mask, is_masked, bounds_in, bounds_out, missing_value) &
+function do_time_max_wrapper(this, field_data, mask, is_masked, bounds_in, bounds_out, missing_value, on_device) &
   result(err_msg)
   class(fmsDiagOutputBuffer_type), intent(inout) :: this                !< buffer object to write
   class(*),                        intent(in)    :: field_data(:,:,:,:) !< Buffer data for current time
@@ -710,6 +743,8 @@ function do_time_max_wrapper(this, field_data, mask, is_masked, bounds_in, bound
   logical,                         intent(in)    :: mask(:,:,:,:)       !< Mask for the field
   logical,                         intent(in)    :: is_masked           !< .True. if the field has a mask
   real(kind=r8_kind),              intent(in)    :: missing_value       !< Missing_value for data points that are masked
+  logical, optional,               intent(in)    :: on_device           !< .True. if the data and the buffer are on
+                                                                        !! the OpenMP device, where the update is done
   character(len=50) :: err_msg
 
   !TODO This will be expanded for integers
@@ -718,7 +753,8 @@ function do_time_max_wrapper(this, field_data, mask, is_masked, bounds_in, bound
     type is (real(kind=r8_kind))
       select type (field_data)
       type is (real(kind=r8_kind))
-        call do_time_max(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, missing_value)
+        call do_time_max(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, missing_value, &
+                        on_device)
       class default
         err_msg="do_time_max_wrapper::the output buffer and the buffer send in are not of the same type (r8_kind)"
       end select
@@ -726,7 +762,7 @@ function do_time_max_wrapper(this, field_data, mask, is_masked, bounds_in, bound
       select type (field_data)
       type is (real(kind=r4_kind))
         call do_time_max(output_buffer, field_data, mask, is_masked, bounds_in, bounds_out, &
-          real(missing_value, kind=r4_kind))
+          real(missing_value, kind=r4_kind), on_device)
       class default
         err_msg="do_time_max_wrapper::the output buffer and the buffer send in are not of the same type (r4_kind)"
       end select
@@ -736,7 +772,7 @@ end function do_time_max_wrapper
 !> @brief Does the time_sum reduction method on the buffer object
 !! @return Error message if the math was not successful
 function do_time_sum_wrapper(this, field_data, mask, is_masked, mask_variant, bounds_in, bounds_out, missing_value, &
-                             has_missing_value, pow_value, weight) &
+                             has_missing_value, pow_value, weight, on_device) &
   result(err_msg)
   class(fmsDiagOutputBuffer_type), intent(inout) :: this                !< buffer object to write
   class(*),                        intent(in)    :: field_data(:,:,:,:) !< Buffer data for current time
@@ -752,8 +788,21 @@ function do_time_sum_wrapper(this, field_data, mask, is_masked, mask_variant, bo
                                                                         !! before adding to buffer should only be
                                                                         !! present if using pow reduction method
   real(kind=r8_kind), optional,    intent(in)    :: weight              !< The weight to use when suming
+  logical, optional,               intent(in)    :: on_device           !< .True. if the data and the buffer are on
+                                                                        !! the OpenMP device, where the update is done
   character(len=150) :: err_msg
 
+  integer :: i, j, k, l, n1, n2, n3, n4 !< For looping
+  logical :: dev         !< .True. if the update is done on the device
+  logical :: has_missing !< .True. if the data hold the missing value
+
+  dev = .false.
+  if (present(on_device)) dev = on_device
+  n1 = size(field_data,1)
+  n2 = size(field_data,2)
+  n3 = size(field_data,3)
+  n4 = size(field_data,4)
+  !< Unmasked data must not hold the missing value. The ANY() of the check is a reduction that can run on the device.
   !TODO This will be expanded for integers
   err_msg = ""
   select type (output_buffer => this%buffer)
@@ -761,12 +810,26 @@ function do_time_sum_wrapper(this, field_data, mask, is_masked, mask_variant, bo
       select type (field_data)
       type is (real(kind=r8_kind))
         if (.not. is_masked) then
-          if (any(field_data .eq. missing_value)) &
+          has_missing = .false.
+          ! nvfortran 26.9: the host fallback of a reduction loop copies the scalar to and from
+          ! the device, which loses the host result. Map it by hand and copy it back only
+          ! if the loop ran on the device.
+          !$omp target enter data map(to: has_missing)
+          !$omp target teams loop collapse(4) reduction(.or.:has_missing) if(dev)
+          do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+            if (field_data(i,j,k,l) .eq. missing_value) has_missing = .true.
+          enddo ; enddo ; enddo ; enddo
+          if (dev) then
+            !$omp target exit data map(from: has_missing)
+          else
+            !$omp target exit data map(release: has_missing)
+          endif
+          if (has_missing) &
             err_msg = "You cannot pass data with missing values without masking them!"
         endif
         call do_time_sum_update(output_buffer, this%weight_sum, field_data, mask, is_masked, mask_variant, &
                                 bounds_in, bounds_out, missing_value, this%diurnal_section, &
-                                pow=pow_value, weight=weight)
+                                pow=pow_value, weight=weight, on_device=on_device)
       class default
         err_msg="do_time_sum_wrapper::the output buffer and the buffer send in are not of the same type (r8_kind)"
       end select
@@ -774,12 +837,26 @@ function do_time_sum_wrapper(this, field_data, mask, is_masked, mask_variant, bo
       select type (field_data)
       type is (real(kind=r4_kind))
         if (.not. is_masked) then
-          if (any(field_data .eq. missing_value)) &
+          has_missing = .false.
+          ! nvfortran 26.9: the host fallback of a reduction loop copies the scalar to and from
+          ! the device, which loses the host result. Map it by hand and copy it back only
+          ! if the loop ran on the device.
+          !$omp target enter data map(to: has_missing)
+          !$omp target teams loop collapse(4) reduction(.or.:has_missing) if(dev)
+          do l = 1, n4 ; do k = 1, n3 ; do j = 1, n2 ; do i = 1, n1
+            if (field_data(i,j,k,l) .eq. missing_value) has_missing = .true.
+          enddo ; enddo ; enddo ; enddo
+          if (dev) then
+            !$omp target exit data map(from: has_missing)
+          else
+            !$omp target exit data map(release: has_missing)
+          endif
+          if (has_missing) &
             err_msg = "You cannot pass data with missing values without masking them!"
         endif
         call do_time_sum_update(output_buffer, this%weight_sum, field_data, mask, is_masked, mask_variant, &
                                 bounds_in, bounds_out, real(missing_value, kind=r4_kind), &
-                                this%diurnal_section, pow=pow_value, weight=weight)
+                                this%diurnal_section, pow=pow_value, weight=weight, on_device=on_device)
       class default
         err_msg="do_time_sum_wrapper::the output buffer and the buffer send in are not of the same type (r4_kind)"
       end select
@@ -947,5 +1024,93 @@ subroutine set_send_data_called(this)
 
   this%send_data_called = .true.
 end subroutine set_send_data_called
+!> @brief Maps the buffer to the OpenMP device at the field's first post from the device. From then on the device
+!! copy holds the latest values, and the field must be posted from the device.
+subroutine map_to_device(this)
+  class(fmsDiagOutputBuffer_type), intent(inout) :: this !< Buffer object
+
+  if (this%on_device) return
+  select type (buff => this%buffer)
+  type is (real(kind=r8_kind))
+    call buffer_enter_device_r8(buff)
+  type is (real(kind=r4_kind))
+    call buffer_enter_device_r4(buff)
+  class default
+    call mpp_error(FATAL, "map_to_device: the buffer of "//this%get_buffer_name()//&
+                          " must be real(r4_kind) or real(r8_kind)")
+  end select
+  this%on_device = .true.
+  this%host_current = .true.
+end subroutine map_to_device
+
+!> @brief Brings the host copy of a buffer that lives on the device up to date, before the buffer is finished and
+!! written.
+subroutine device_to_host(this)
+  class(fmsDiagOutputBuffer_type), intent(inout) :: this !< Buffer object
+
+  if (.not. this%on_device) return
+  if (this%host_current) return
+  select type (buff => this%buffer)
+  type is (real(kind=r8_kind))
+    call buffer_update_host_r8(buff)
+  type is (real(kind=r4_kind))
+    call buffer_update_host_r4(buff)
+  end select
+  this%host_current = .true.
+end subroutine device_to_host
+
+!> @brief Deletes the device copy of the buffer at the end of the run.
+subroutine delete_device(this)
+  class(fmsDiagOutputBuffer_type), intent(inout) :: this !< Buffer object
+
+  if (.not. this%on_device) return
+  select type (buff => this%buffer)
+  type is (real(kind=r8_kind))
+    call buffer_delete_device_r8(buff)
+  type is (real(kind=r4_kind))
+    call buffer_delete_device_r4(buff)
+  end select
+  this%on_device = .false.
+  this%host_current = .true.
+end subroutine delete_device
+
+!> @brief Maps a real(r8_kind) buffer to the device (a plain dummy keeps derived-type components out of the map
+!! clauses).
+subroutine buffer_enter_device_r8(buff)
+  real(kind=r8_kind), intent(inout) :: buff(:,:,:,:,:) !< The buffer
+  !$omp target enter data map(to: buff)
+end subroutine buffer_enter_device_r8
+
+!> @brief Copies a real(r8_kind) buffer back from the device.
+subroutine buffer_update_host_r8(buff)
+  real(kind=r8_kind), intent(inout) :: buff(:,:,:,:,:) !< The buffer
+  !$omp target update from(buff)
+end subroutine buffer_update_host_r8
+
+!> @brief Deletes the device copy of a real(r8_kind) buffer.
+subroutine buffer_delete_device_r8(buff)
+  real(kind=r8_kind), intent(inout) :: buff(:,:,:,:,:) !< The buffer
+  !$omp target exit data map(delete: buff)
+end subroutine buffer_delete_device_r8
+
+!> @brief Maps a real(r4_kind) buffer to the device (a plain dummy keeps derived-type components out of the map
+!! clauses).
+subroutine buffer_enter_device_r4(buff)
+  real(kind=r4_kind), intent(inout) :: buff(:,:,:,:,:) !< The buffer
+  !$omp target enter data map(to: buff)
+end subroutine buffer_enter_device_r4
+
+!> @brief Copies a real(r4_kind) buffer back from the device.
+subroutine buffer_update_host_r4(buff)
+  real(kind=r4_kind), intent(inout) :: buff(:,:,:,:,:) !< The buffer
+  !$omp target update from(buff)
+end subroutine buffer_update_host_r4
+
+!> @brief Deletes the device copy of a real(r4_kind) buffer.
+subroutine buffer_delete_device_r4(buff)
+  real(kind=r4_kind), intent(inout) :: buff(:,:,:,:,:) !< The buffer
+  !$omp target exit data map(delete: buff)
+end subroutine buffer_delete_device_r4
+
 #endif
 end module fms_diag_output_buffer_mod

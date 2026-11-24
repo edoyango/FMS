@@ -204,6 +204,7 @@ subroutine fms_diag_object_end (this, time)
 
   !TODO: Deallocate diag object arrays and clean up all memory
   do i=1, size(this%FMS_diag_output_buffers)
+    call this%FMS_diag_output_buffers(i)%delete_device()
     call this%FMS_diag_output_buffers(i)%flush_buffer()
   enddo
   deallocate(this%FMS_diag_output_buffers)
@@ -575,7 +576,7 @@ end function fms_diag_axis_init
 !! to the multi-threaded option for processing later
 subroutine fms_diag_accept_data (this, diag_field_id, field_data, mask, rmask, &
                                        time, is_in, js_in, ks_in, &
-                                       ie_in, je_in, ke_in, weight, err_msg)
+                                       ie_in, je_in, ke_in, weight, err_msg, on_device)
   class(fmsDiagObject_type),TARGET,      INTENT(inout)          :: this          !< Diaj_obj to fill
   INTEGER,                               INTENT(in)             :: diag_field_id !< The ID of the diag field
   CLASS(*), DIMENSION(:,:,:,:),          INTENT(in)             :: field_data    !< The data for the diag_field
@@ -588,6 +589,9 @@ subroutine fms_diag_accept_data (this, diag_field_id, field_data, mask, rmask, &
   INTEGER,                               INTENT(in),   OPTIONAL :: is_in, js_in, ks_in !< Starting indices
   INTEGER,                               INTENT(in),   OPTIONAL :: ie_in, je_in, ke_in !< Ending indices
   CHARACTER(len=*),                      INTENT(out),  OPTIONAL :: err_msg       !< An error message returned
+  LOGICAL,                               INTENT(in),   OPTIONAL :: on_device     !< If true, field_data, mask and rmask
+                                                                                 !! are on the OpenMP device, and the
+                                                                                 !! buffers are updated there
 
   integer                                  :: is, js, ks      !< Starting indicies of the field_data
   integer                                  :: ie, je, ke      !< Ending indicies of the field_data
@@ -605,9 +609,12 @@ subroutine fms_diag_accept_data (this, diag_field_id, field_data, mask, rmask, &
   type(fmsDiagIbounds_type)                :: bounds          !< Bounds (starting ending indices) for the field
   logical                                  :: has_halos       !< .True. if field_data contains halos
   logical                                  :: using_blocking  !< .True. if field_data is passed in blocks
+  logical                                  :: dev             !< .True. if the data were posted from the device
 #ifndef use_yaml
 CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling with -Duse_yaml")
 #else
+  dev = .false.
+  if (present(on_device)) dev = on_device
 
   !TODO this%FMS_diag_fields(diag_field_id) should be a pointer!
   field_info = " Check send data call for field:"//trim(this%FMS_diag_fields(diag_field_id)%get_varname())//&
@@ -644,8 +651,10 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
     "mask and rmask are both present in the send_data call. "//&
     trim(field_info))
 
-  !< Create the oor_mask based on the "mask" and "rmask" arguments
-  oor_mask = init_mask(rmask, mask, field_data)
+  !< Create the oor_mask based on the "mask" and "rmask" arguments (on the device for a post from the device)
+  allocate(oor_mask(size(field_data,1), size(field_data,2), size(field_data,3), size(field_data,4)))
+  if (dev) call device_alloc_logical_4d(oor_mask)
+  call init_mask(oor_mask, rmask, mask, dev)
 
   !> Does the user want to push off calculations until send_diag_complete?
   buffer_the_data = .false.
@@ -685,6 +694,12 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
   !! This is so that the other reduction methods work and just averaging
   if (this%FMS_diag_fields(diag_field_id)%get_multiple_send_data()) &
     buffer_the_data = .true.
+
+  !< Posts from the device cover unbuffered time averages and instantaneous values, without mask_variant
+  if (dev .and. buffer_the_data) call mpp_error(FATAL, "A post from the device cannot be buffered (posts from "//&
+    "OpenMP threads, in blocks, or with multiple_send_data are not supported)."//trim(field_info))
+  if (dev .and. this%FMS_diag_fields(diag_field_id)%is_mask_variant()) call mpp_error(FATAL, &
+    "A post from the device cannot be mask_variant."//trim(field_info))
 
   !If this is true, buffer data
   main_if: if (buffer_the_data) then
@@ -743,16 +758,33 @@ CALL MPP_ERROR(FATAL,"You can not use the modern diag manager without compiling 
 
     call this%allocate_diag_field_output_buffers(field_data, diag_field_id)
     error_string = this%fms_diag_do_reduction(field_data, diag_field_id, oor_mask, field_weight, &
-      bounds, using_blocking, Time=Time)
+      bounds, using_blocking, Time=Time, on_device=dev)
     if (trim(error_string) .ne. "") call mpp_error(FATAL, trim(error_string)//". "//trim(field_info))
     call this%FMS_diag_fields(diag_field_id)%set_math_needs_to_be_done(.FALSE.)
     if(.not. this%FMS_diag_fields(diag_field_id)%has_mask_allocated()) &
       call this%FMS_diag_fields(diag_field_id)%allocate_mask(oor_mask)
-    call this%FMS_diag_fields(diag_field_id)%set_mask(oor_mask, field_info)
+    !< The stored mask is only read by the buffered path, which posts from the device do not use; the host copy of
+    !! oor_mask is not set by them.
+    if (.not. dev) call this%FMS_diag_fields(diag_field_id)%set_mask(oor_mask, field_info)
+    if (dev) call device_delete_logical_4d(oor_mask)
   end if main_if
   !> Return false if nothing is done
 #endif
 end subroutine fms_diag_accept_data
+
+!> Create an OpenMP device copy of the out-of-range mask of fms_diag_accept_data, without copying its values.
+!! Mapping through a plain dummy keeps the descriptors of the caller's pointers out of the mapping: an inline enter
+!! data maps them too, and nvfortran never unmaps them.
+subroutine device_alloc_logical_4d(a)
+  logical, dimension(:,:,:,:) :: a !< The mask
+  !$omp target enter data map(alloc: a)
+end subroutine device_alloc_logical_4d
+
+!> Delete the OpenMP device copy of the out-of-range mask of fms_diag_accept_data.
+subroutine device_delete_logical_4d(a)
+  logical, dimension(:,:,:,:) :: a !< The mask
+  !$omp target exit data map(delete: a)
+end subroutine device_delete_logical_4d
 
 !< @brief Do the math for all the buffers
 subroutine do_buffer_math(this)
@@ -905,6 +937,8 @@ subroutine fms_diag_do_io(this, end_time)
       if (diag_field%is_static() .and. diag_buff%get_unlim_dim() > 0) cycle
 
       if ( diag_buff%is_time_to_finish_reduction(end_time) .and. .not. do_not_write) then
+        !< A buffer that lives on the device is brought back before it is finished and written
+        call diag_buff%device_to_host()
         ! sets missing value
         mval = diag_field%find_missing_value(missing_val)
         ! time_average and greater values all involve averaging so need to be "finished" before written
@@ -946,7 +980,7 @@ end subroutine fms_diag_do_io
 !! based on the specified reduction method for the field.
 !> @return Empty string if successful, error message if it fails
 function fms_diag_do_reduction(this, field_data, diag_field_id, oor_mask, weight, &
-  bounds, using_blocking, time) &
+  bounds, using_blocking, time, on_device) &
   result(error_msg)
   class(fmsDiagObject_type), intent(inout), target:: this                !< Diag Object
   class(*),                  intent(in)           :: field_data(:,:,:,:) !< Field data
@@ -957,6 +991,9 @@ function fms_diag_do_reduction(this, field_data, diag_field_id, oor_mask, weight
   logical,                   intent(in)           :: using_blocking      !< .True. if field data is passed
                                                                          !! in blocks
   type(time_type),           intent(in), optional :: time                !< Current time
+  logical,                   intent(in), optional :: on_device           !< .True. if field_data and oor_mask are on
+                                                                         !! the OpenMP device, and the buffers are
+                                                                         !! updated there
 
   character(len=150)         :: error_msg          !< Error message to check
   !TODO Mostly everything
@@ -987,9 +1024,15 @@ function fms_diag_do_reduction(this, field_data, diag_field_id, oor_mask, weight
   real(kind=r8_kind)        :: missing_value      !< Missing_value for data points that are masked
                                                   !! This will obtained as r8 and converted to the right type as
                                                   !! needed. This is to avoid yet another select type ...
+  logical                   :: dev                !< .True. if the data were posted from the device
+  character(len=256)        :: field_info         !< Field and module names for error messages
 
   !TODO mostly everything
   field_ptr => this%FMS_diag_fields(diag_field_id)
+  dev = .false.
+  if (present(on_device)) dev = on_device
+  field_info = " Check send data call for field:"//trim(field_ptr%get_varname())//" and module:"//&
+    trim(field_ptr%get_modname())
   if (field_ptr%has_missing_value()) then
     select type (missing_val => field_ptr%get_missing_value(r8))
     type is (real(kind=r8_kind))
@@ -1052,6 +1095,8 @@ function fms_diag_do_reduction(this, field_data, diag_field_id, oor_mask, weight
 
         select type (diag_axis => this%diag_axis(axis_ids(i))%axis)
         type is (fmsDiagSubAxis_type)
+          if (dev) call mpp_error(FATAL, "Output on a sub-axis (zbounds or a region) is not supported for a "//&
+            "post from the device."//trim(field_info))
           sindex = diag_axis%get_starting_index()
           eindex = diag_axis%get_ending_index()
           compute_idx = diag_axis%get_compute_indices()
@@ -1082,24 +1127,38 @@ function fms_diag_do_reduction(this, field_data, diag_field_id, oor_mask, weight
 
     !< Determine the reduction method for the buffer
     reduction_method = field_yaml_ptr%get_var_reduction()
+
+    !< The buffer of a field posted from the device lives on the device, from its first post on
+    if (dev) then
+      if (reduction_method .ne. time_none .and. reduction_method .ne. time_average .and. &
+          reduction_method .ne. time_min .and. reduction_method .ne. time_max) call mpp_error(FATAL, &
+        "Only the none, average, min and max reductions are supported for a post from the device."//trim(field_info))
+      if (is_subregional) call mpp_error(FATAL, &
+        "Regional output is not supported for a post from the device."//trim(field_info))
+      call buffer_ptr%map_to_device()
+      buffer_ptr%host_current = .false.
+    elseif (buffer_ptr%on_device) then
+      call mpp_error(FATAL, "The field has been posted from the device, so it must always be posted with "//&
+        "on_device=.true."//trim(field_info))
+    endif
     if (present(time)) call buffer_ptr%update_buffer_time(time)
     call buffer_ptr%set_send_data_called()
     select case(reduction_method)
     case (time_none)
       error_msg = buffer_ptr%do_time_none_wrapper(field_data, oor_mask, field_ptr%get_var_is_masked(), &
-        bounds_in, bounds_out, missing_value)
+        bounds_in, bounds_out, missing_value, on_device=dev)
       if (trim(error_msg) .ne. "") then
         return
       endif
     case (time_min)
       error_msg = buffer_ptr%do_time_min_wrapper(field_data, oor_mask, field_ptr%get_var_is_masked(), &
-        bounds_in, bounds_out, missing_value)
+        bounds_in, bounds_out, missing_value, on_device=dev)
       if (trim(error_msg) .ne. "") then
         return
       endif
     case (time_max)
       error_msg = buffer_ptr%do_time_max_wrapper(field_data, oor_mask, field_ptr%get_var_is_masked(), &
-        bounds_in, bounds_out, missing_value)
+        bounds_in, bounds_out, missing_value, on_device=dev)
       if (trim(error_msg) .ne. "") then
         return
       endif
@@ -1112,7 +1171,7 @@ function fms_diag_do_reduction(this, field_data, diag_field_id, oor_mask, weight
     case (time_average)
       error_msg = buffer_ptr%do_time_sum_wrapper(field_data, oor_mask, field_ptr%get_var_is_masked(), &
         field_ptr%get_mask_variant(), bounds_in, bounds_out, missing_value, field_ptr%has_missing_value(), &
-        weight=weight)
+        weight=weight, on_device=dev)
       if (trim(error_msg) .ne. "") then
         return
       endif
